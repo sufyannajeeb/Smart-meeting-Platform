@@ -1,0 +1,2567 @@
+{% extends "base.html" %}
+
+{% load static %}
+
+{% block title %}{{ room.title }} — Live Meeting{% endblock %}
+
+{% block content %}
+<style>
+  /* The meeting room must always fill the viewport exactly, with the
+     control bar always in view — no scrolling to find it. base.html may
+     add its own navbar/padding around this page's main content area, and
+     any of that would otherwise push our bottom control bar below the
+     fold even with height: 100vh on .meeting-container (100vh only
+     measures the container itself, not whether something above it
+     already ate part of the viewport). Pinning to position: fixed with
+     inset: 0 removes the meeting room from that flow entirely, so it
+     always covers the whole screen regardless of what else base.html
+     renders around it. */
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body { background-color: #0b1326; color: #dae2fd; }
+  .card { background-color: #131b2e; border: 1px solid #434655; color: #dae2fd; }
+  .card-header { background-color: #171f33 !important; border-bottom: 1px solid #434655; color: #f0f6fc; }
+  .card-body { color: #dae2fd; }
+  .text-muted { color: #c3c6d7 !important; }
+  .alert-info { background-color: #131b2e; border-color: #434655; color: #c3c6d7; }
+  .form-label { color: #c9d1d9; }
+  .form-select { background-color: #0f1115; color: #c9d1d9; border-color: #434655; }
+  .form-select option { background-color: #0f1115; color: #c9d1d9; }
+  hr { border-color: #434655; }
+  .border { border-color: #434655 !important; }
+  .transcript-text, .small.mb-0 { color: #dae2fd; }
+  .h4, h2.h4 { color: #f0f6fc; }
+  code { color: #ffa657; }
+  .btn-outline-primary { color: #b4c5ff; border-color: #434655; }
+  .btn-outline-primary:hover { background: #2563eb; color: #fff; }
+
+  /* ===================== Meeting room — design tokens ===================== */
+  :root {
+    --mm-bg: #0b1326;
+    --mm-panel: #131b2e;
+    --mm-panel-alt: #171f33;
+    --mm-panel-high: #222a3d;
+    --mm-panel-highest: #2d3449;
+    --mm-border: #434655;
+    --mm-text: #dae2fd;
+    --mm-text-dim: #c3c6d7;
+    --mm-accent: #b4c5ff;          /* primary — used for text/active states */
+    --mm-accent-strong: #2563eb;   /* primary-container — used for filled buttons */
+    --mm-accent-soft: rgba(37, 99, 235, 0.22);
+    --mm-danger: #ffb4ab;
+    --mm-danger-strong: #93000a;
+    --mm-warning: #ffb2b7;
+    --mm-warning-strong: #d22348;
+    --mm-success: #4edea3;
+    --mm-success-strong: #00a572;
+  }
+
+  * { box-sizing: border-box; }
+
+  .meeting-container {
+    position: fixed;
+    inset: 0;
+    height: 100vh;
+    height: 100dvh; /* accounts for mobile browser address-bar chrome so the
+                        control bar isn't hidden behind it */
+    display: flex;
+    flex-direction: column;
+    background-color: var(--mm-bg);
+    color: var(--mm-text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    z-index: 1000;
+  }
+
+  /* ---------- Header ---------- */
+  .meeting-header {
+    padding: 0.7rem 1.5rem;
+    background-color: rgba(11, 19, 38, 0.82);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--mm-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1.25rem;
+    flex-shrink: 0;
+  }
+
+  /* Brand mark, mirrors the SmartMeet AI wordmark in the app header */
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+  .header-brand .bi {
+    font-size: 1.4rem;
+    color: var(--mm-accent-strong);
+  }
+  .header-brand .brand-name {
+    font-weight: 700;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    color: var(--mm-accent);
+    white-space: nowrap;
+  }
+  .header-brand .brand-name-accent { color: var(--mm-text); font-weight: 500; }
+
+  .header-divider-vert {
+    width: 1px;
+    height: 26px;
+    background-color: var(--mm-border);
+    flex-shrink: 0;
+  }
+
+  .header-left { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+
+  .meeting-title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+  }
+
+  .meeting-header h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0;
+    color: #f8f9fa;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .header-divider-dot { color: var(--mm-text-dim); font-size: 0.8rem; }
+
+  .meeting-timer {
+    font-size: 0.8rem;
+    color: var(--mm-text-dim);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+
+  .room-code-row { display: flex; align-items: center; gap: 0.4rem; }
+
+  .copy-code-btn {
+    border: none;
+    background: transparent;
+    color: var(--mm-text-dim);
+    font-size: 0.75rem;
+    padding: 1px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: color 0.15s, background-color 0.15s;
+  }
+  .copy-code-btn:hover { color: var(--mm-text); background-color: var(--mm-panel-high); }
+
+  .header-right { display: flex; align-items: center; gap: 0.85rem; flex-shrink: 0; }
+
+  /* User pill, mirrors the account chip in the mockup's TopAppBar */
+  .header-user-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    background-color: var(--mm-panel);
+    border: 1px solid var(--mm-border);
+    padding: 5px 12px 5px 6px;
+    border-radius: 999px;
+  }
+  .header-user-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background-color: var(--mm-accent-strong);
+    color: #eeefff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.72rem;
+    flex-shrink: 0;
+  }
+  .header-user-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--mm-text);
+    letter-spacing: 0.02em;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rec-indicator {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    color: var(--mm-danger);
+    font-weight: 600;
+    font-size: 0.8rem;
+    background: rgba(255, 180, 171, 0.1);
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid rgba(255, 180, 171, 0.3);
+  }
+
+  .rec-dot {
+    width: 7px;
+    height: 7px;
+    background-color: var(--mm-danger);
+    border-radius: 50%;
+    animation: pulse 1.5s infinite;
+  }
+
+  /* Live audio-level meter shown while recording. Bars fill from the
+     bottom based on --level (set by recorder.js); a .low class turns them
+     red to signal that captured audio is too quiet. */
+  .rec-level-meter {
+    display: none;
+    align-items: flex-end;
+    gap: 3px;
+    height: 22px;
+    padding: 4px 8px;
+    border-radius: 20px;
+    background: rgba(19, 27, 46, 0.8);
+    border: 1px solid rgba(78, 222, 163, 0.35);
+  }
+  .rec-level-meter .rec-level-bar {
+    width: 4px;
+    border-radius: 2px;
+    background: var(--mm-success);
+    opacity: 0.25;
+    transition: height 0.12s ease, background-color 0.2s, opacity 0.2s;
+  }
+  .rec-level-bar.bar-1 { height: 25%; }
+  .rec-level-bar.bar-2 { height: 45%; }
+  .rec-level-bar.bar-3 { height: 65%; }
+  .rec-level-bar.bar-4 { height: 85%; }
+  .rec-level-bar.bar-5 { height: 100%; }
+  .rec-level-meter.low .rec-level-bar { background: var(--mm-danger); }
+  .rec-level-meter.low { border-color: rgba(210, 35, 72, 0.5); }
+
+  .presenting-indicator {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    color: var(--mm-success);
+    font-weight: 600;
+    font-size: 0.8rem;
+    background: rgba(78, 222, 163, 0.1);
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid rgba(78, 222, 163, 0.3);
+  }
+
+  @keyframes pulse {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.25); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  /* ---------- Main layout ---------- */
+  .meeting-body { flex: 1; display: flex; overflow: hidden; position: relative; }
+
+  .video-area {
+    flex: 1;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow-y: auto;
+    min-width: 0;
+  }
+
+  .video-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-content: center;
+    align-items: center;
+    gap: 1rem;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Each tile fits within the available space while keeping its 16:9
+     ratio — so a single participant doesn't stretch edge-to-edge, and
+     multiple tiles wrap and shrink instead of overflowing. The height
+     budget (100vh - 260px) accounts for header + control bar + padding. */
+  .video-tile-wrap {
+    width: min(100%, 640px, calc((100vh - 260px) * 16 / 9));
+    flex: 0 1 auto;
+  }
+
+  /* Remote tiles added dynamically by webrtc.js — same fit-to-space rule */
+  .video-grid > .video-tile:not(.video-tile-wrap .video-tile) {
+    width: min(100%, 640px, calc((100vh - 260px) * 16 / 9));
+    flex: 0 1 auto;
+  }
+
+  /* With just you in the room, allow the single tile to grow a bit
+     larger (but still capped) so it doesn't look tiny and lost either */
+  .video-grid:has(> :only-child) .video-tile-wrap {
+    width: min(100%, 900px, calc((100vh - 260px) * 16 / 9));
+  }
+  /* Generic tile styling — also applies to any tiles added dynamically by webrtc.js */
+  .video-tile {
+    background-color: #000;
+    border-radius: 16px;
+    aspect-ratio: 16 / 9;
+    width: 100%;
+    object-fit: cover;
+    border: 1px solid var(--mm-border);
+  }
+
+  /* Mirror the LOCAL self-view only — this is purely a display flip so your
+     own preview feels natural (like looking in a mirror). It does not affect
+     what's actually captured/sent: the raw video track used for the peer
+     connection and for MediaRecorder is untouched, so remote participants
+     and the recording/transcript both see you the "right" way round,
+     un-mirrored, same as before. */
+  #local-video {
+    transform: scaleX(-1);
+  }
+
+  /* Local tile wrapper — adds name badge, mic state, camera-off avatar and a speaking glow */
+  .video-tile-wrap {
+    position: relative;
+    border-radius: 16px;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    background: linear-gradient(160deg, #171f33, #0b1326);
+    border: 1px solid var(--mm-border);
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+  }
+
+  .video-tile-wrap:hover {
+    box-shadow: 0 0 24px rgba(180, 197, 255, 0.12);
+  }
+
+  .video-tile-wrap.speaking {
+    box-shadow: 0 0 0 3px var(--mm-success), 0 0 18px 2px rgba(78, 222, 163, 0.35);
+  }
+
+  .video-tile-wrap .video-tile {
+    position: absolute;
+    inset: 0;
+    border: none;
+    border-radius: 0;
+  }
+
+  .video-avatar-fallback {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at 50% 40%, #222a3d, #0b1326);
+  }
+
+  .avatar-circle {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--mm-accent-strong), #0053db);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .tile-overlay {
+    position: absolute;
+    left: 10px;
+    bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(6, 14, 32, 0.7);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .tile-mic-icon { font-size: 0.75rem; color: var(--mm-text-dim); display: flex; }
+  .tile-mic-icon.muted { color: var(--mm-danger); }
+
+  /* Hand-raised badge shown on a video tile */
+  .tile-hand-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: rgba(210, 35, 72, 0.18);
+    border: 1px solid rgba(210, 35, 72, 0.5);
+    color: var(--mm-warning);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    animation: hand-wobble 1.6s ease-in-out infinite;
+  }
+  .tile-hand-badge.show { display: flex; }
+
+  /* Presenting badge shown on a video tile while that participant is
+     screen-sharing. Sits to the left of the hand-raised badge so both
+     can show at once. */
+  .tile-presenting-badge {
+    position: absolute;
+    top: 10px;
+    right: 48px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: rgba(78, 222, 163, 0.18);
+    border: 1px solid rgba(78, 222, 163, 0.5);
+    color: var(--mm-success);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+  }
+  .tile-presenting-badge.show { display: flex; }
+
+  /* ---------- Sign Reactions (Beta) ---------- */
+  /* Recognized static hand signs no longer render a running text caption —
+     see the JS below for exactly what "recognized" means and its limits.
+     Instead each recognized gesture floats a small burst of emoji up the
+     screen, reusing the same floating-reaction visuals as the manual
+     Reactions button below. */
+
+  .control-btn.sign-active {
+    background-color: var(--mm-accent-soft);
+    color: var(--mm-accent);
+  }
+  .control-btn.sign-loading {
+    background-color: var(--mm-panel-high);
+    color: var(--mm-text-dim);
+    animation: sign-loading-pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes sign-loading-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
+  /* While the local tile is showing a screen share instead of the camera,
+     don't mirror it — a mirrored screen share reads backwards/confusing,
+     unlike a mirrored camera self-view which feels natural. */
+  .video-tile-wrap.screen-sharing #local-video {
+    transform: none;
+    object-fit: contain;
+    background-color: #000;
+  }
+
+  @keyframes hand-wobble {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-12deg); }
+    75% { transform: rotate(12deg); }
+  }
+
+  #status-line { color: var(--mm-text-dim); font-size: 0.8rem; margin-top: 0.25rem; }
+
+  /* ---------- Sidebar ---------- */
+  .meeting-sidebar {
+    width: 320px;
+    background-color: rgba(19, 27, 46, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-left: 1px solid var(--mm-border);
+    padding: 1.25rem;
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    box-shadow: rgba(180, 197, 255, 0.08) 0px 0px 24px;
+    transition: width 0.2s ease, padding 0.2s ease, opacity 0.15s ease;
+  }
+
+  .meeting-sidebar.collapsed {
+    width: 0;
+    padding-left: 0;
+    padding-right: 0;
+    opacity: 0;
+    border-left: none;
+    overflow: hidden;
+  }
+
+  .sidebar-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+    color: var(--mm-text-dim);
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* AI activity flair, mirrors the mockup's "AI Assistant Active" line */
+  .sidebar-ai-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: 0.68rem;
+    color: var(--mm-success);
+    margin-bottom: 1rem;
+  }
+  .sidebar-ai-status .ai-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--mm-success);
+    animation: pulse 1.8s infinite;
+  }
+
+  /* ---------- Sidebar tabs (Participants / Chat) ---------- */
+  .sidebar-tabs {
+    display: flex;
+    gap: 4px;
+    background-color: var(--mm-panel-alt);
+    border: 1px solid var(--mm-border);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 1rem;
+    flex-shrink: 0;
+  }
+
+  .sidebar-tab-btn {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--mm-text-dim);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 7px 8px;
+    border-radius: 9px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    transition: background-color 0.15s, color 0.15s;
+  }
+
+  .sidebar-tab-btn.active { background-color: var(--mm-accent-soft); color: var(--mm-accent); }
+  .sidebar-tab-btn .tab-badge {
+    background-color: var(--mm-danger-strong);
+    color: #fff;
+    font-size: 0.65rem;
+    padding: 0 5px;
+    border-radius: 8px;
+    line-height: 15px;
+    min-width: 15px;
+    text-align: center;
+    display: none;
+  }
+  .sidebar-tab-btn .tab-badge.show { display: inline-block; }
+
+  .sidebar-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
+  .sidebar-panel.active { display: flex; }
+
+  .participant-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background-color: var(--mm-panel-alt);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--mm-border);
+  }
+
+  .participant-item-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+  .participant-avatar {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--mm-accent-strong), #0053db);
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .participant-status-icons { display: flex; gap: 6px; color: var(--mm-text-dim); font-size: 0.85rem; flex-shrink: 0; align-items: center; }
+  .participant-status-icons .hand-flag { color: var(--mm-warning); display: none; font-size: 0.9rem; line-height: 1; }
+  .participant-status-icons .hand-flag.show { display: inline-flex; }
+
+  .info-card {
+    background-color: var(--mm-bg);
+    border: 1px solid var(--mm-border);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 1.25rem;
+    font-size: 0.8rem;
+    color: var(--mm-text-dim);
+  }
+
+  /* ---------- Chat panel ---------- */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 2px;
+    margin-bottom: 0.75rem;
+  }
+
+  .chat-empty {
+    color: var(--mm-text-dim);
+    font-size: 0.82rem;
+    text-align: center;
+    margin-top: 1.5rem;
+  }
+
+  .chat-msg { display: flex; flex-direction: column; gap: 2px; }
+  .chat-msg.own { align-items: flex-end; }
+
+  .chat-msg-meta {
+    font-size: 0.7rem;
+    color: var(--mm-text-dim);
+    display: flex;
+    gap: 6px;
+  }
+
+  .chat-msg-bubble {
+    background-color: var(--mm-panel-high);
+    border: 1px solid var(--mm-border);
+    color: var(--mm-text);
+    padding: 8px 12px;
+    border-radius: 16px 16px 16px 4px;
+    font-size: 0.85rem;
+    max-width: 92%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+
+  .chat-msg.own .chat-msg-bubble {
+    background-color: var(--mm-accent-soft);
+    border-color: rgba(37, 99, 235, 0.4);
+    border-radius: 16px 16px 4px 16px;
+  }
+
+  .chat-msg.system .chat-msg-bubble {
+    background-color: transparent;
+    border: none;
+    color: var(--mm-text-dim);
+    font-style: italic;
+    font-size: 0.78rem;
+    padding: 2px 0;
+    border-radius: 0;
+  }
+
+  .chat-input-row {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--mm-border);
+    padding-top: 0.75rem;
+  }
+
+  .chat-input {
+    flex: 1;
+    background-color: var(--mm-bg);
+    border: 1px solid var(--mm-border);
+    color: var(--mm-text);
+    border-radius: 10px;
+    padding: 8px 10px;
+    font-size: 0.85rem;
+    resize: none;
+    max-height: 90px;
+  }
+  .chat-input:focus { outline: none; border-color: var(--mm-accent); box-shadow: 0 0 0 1px var(--mm-accent); }
+
+  .chat-send-btn {
+    border: none;
+    background-color: var(--mm-accent-strong);
+    color: #eeefff;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background-color 0.15s, transform 0.1s;
+  }
+  .chat-send-btn:hover { background-color: #1d4fc0; }
+  .chat-send-btn:active { transform: scale(0.94); }
+  .chat-send-btn:disabled { background-color: var(--mm-panel-highest); color: var(--mm-text-dim); cursor: not-allowed; }
+
+  /* ---------- Chat: image attach button ---------- */
+  .chat-attach-btn {
+    border: 1px solid var(--mm-border);
+    background-color: var(--mm-bg);
+    color: var(--mm-text-dim);
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 0.95rem;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .chat-attach-btn:hover { color: var(--mm-text); border-color: var(--mm-accent); }
+
+  /* Staged image preview shown above the input row before sending */
+  .chat-image-staged {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background-color: var(--mm-panel-alt);
+    border: 1px solid var(--mm-border);
+    border-radius: 12px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+  }
+  .chat-image-staged.show { display: flex; }
+  .chat-image-staged img {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+  .chat-image-staged-info {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.75rem;
+    color: var(--mm-text-dim);
+  }
+  .chat-image-staged-remove {
+    border: none;
+    background: transparent;
+    color: var(--mm-text-dim);
+    cursor: pointer;
+    font-size: 0.95rem;
+    padding: 4px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .chat-image-staged-remove:hover { color: var(--mm-danger); background-color: rgba(255, 180, 171, 0.1); }
+
+  /* Image sent/received inside a chat bubble */
+  .chat-msg-image {
+    display: block;
+    max-width: 100%;
+    max-height: 220px;
+    border-radius: 12px;
+    cursor: zoom-in;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .chat-msg-bubble.has-image {
+    padding: 5px;
+    background-color: transparent;
+    border: none;
+  }
+  .chat-msg-bubble.has-image .chat-msg-image-caption {
+    padding: 5px 6px 2px;
+    font-size: 0.85rem;
+  }
+
+  /* Fullscreen lightbox for viewing a chat image at full size */
+  .chat-image-lightbox {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(4, 5, 8, 0.88);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    padding: 40px;
+    cursor: zoom-out;
+  }
+  .chat-image-lightbox.show { display: flex; }
+  .chat-image-lightbox img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .chat-image-lightbox-close {
+    position: absolute;
+    top: 18px;
+    right: 22px;
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.1rem;
+  }
+  .chat-image-lightbox-close:hover { background: rgba(255, 255, 255, 0.16); }
+
+  /* ---------- Hand-raise toast ---------- */
+  .hand-toast-stack {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .hand-toast {
+    background-color: var(--mm-panel-high);
+    border: 1px solid rgba(210, 35, 72, 0.4);
+    color: var(--mm-text);
+    padding: 9px 16px;
+    border-radius: 24px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    animation: toast-in 0.25s ease-out, toast-out 0.3s ease-in 3.7s forwards;
+  }
+
+  .hand-toast .hand-emoji { font-size: 1rem; }
+
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes toast-out {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(-10px); }
+  }
+
+  /* ---------- Reactions (thumbs up / heart / funny) ---------- */
+  .reaction-popup {
+    position: fixed;                 /* was: absolute, positioned relative to
+                                         .control-item — but that sits inside
+                                         .control-bar-inner, which has
+                                         overflow-x: auto. Per the CSS spec,
+                                         setting only overflow-x forces the
+                                         browser to also compute overflow-y as
+                                         auto, so the pill silently clipped
+                                         the popup vertically and squished the
+                                         emoji buttons on top of each other.
+                                         Fixed positioning (computed in JS from
+                                         the button's rect, see below) escapes
+                                         that clipped ancestor entirely. */
+    background-color: var(--mm-panel-high);
+    border: 1px solid var(--mm-border);
+    border-radius: 999px;
+    padding: 6px 8px;
+    display: flex;
+    gap: 4px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);      /* left/top are set in JS at show-time */
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    z-index: 2100;
+  }
+  .reaction-popup.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .reaction-option {
+    border: none;
+    background: transparent;
+    font-size: 1.4rem;
+    line-height: 1;
+    padding: 6px 9px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+  .reaction-option:hover {
+    background-color: var(--mm-panel-alt);
+    transform: scale(1.25);
+  }
+  .reaction-option:active { transform: scale(0.95); }
+
+  /* Layer the floating emoji rise through, spanning the whole meeting body */
+  .reaction-float-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 56;
+  }
+
+  /* Small expanding ring at the origin point — a quick "burst" flash the
+     instant a reaction is sent, before the emoji starts its rise. */
+  .reaction-burst-ring {
+    position: absolute;
+    bottom: 4px;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.55);
+    animation: burst-ring 0.55s ease-out forwards;
+  }
+
+  @keyframes burst-ring {
+    0%   { transform: scale(0.3); opacity: 0.9; }
+    100% { transform: scale(3.4); opacity: 0; }
+  }
+
+  /* Main floating emoji — travels up through four waypoints defined by
+     per-instance CSS custom properties (set in JS), so every reaction
+     takes a slightly different curved, wobbling, rotating path instead
+     of a straight vertical line. */
+  .floating-reaction {
+    position: absolute;
+    bottom: 8px;
+    font-size: var(--fr-size, 2.1rem);
+    line-height: 1;
+    animation: float-up-advanced var(--fr-duration, 2.6s) cubic-bezier(0.18, 0.7, 0.32, 1) forwards;
+    filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.35));
+    will-change: transform, opacity;
+  }
+
+  @keyframes float-up-advanced {
+    0%   { transform: translate(0, 0) rotate(0deg) scale(0.3); opacity: 0; }
+    10%  { opacity: 1; transform: translate(var(--x1, 0px), -36px) rotate(var(--r1, -8deg)) scale(1.2); }
+    35%  { transform: translate(var(--x2, 0px), -120px) rotate(var(--r2, 6deg)) scale(1); }
+    60%  { transform: translate(var(--x3, 0px), -215px) rotate(var(--r3, -6deg)) scale(1.05); }
+    85%  { opacity: 1; transform: translate(var(--x4, 0px), -310px) rotate(var(--r4, 4deg)) scale(1); }
+    100% { transform: translate(var(--x5, 0px), -400px) rotate(var(--r5, 0deg)) scale(0.75); opacity: 0; }
+  }
+
+  /* Trailing sparkle particles spawned alongside each reaction — small,
+     fast, fade quickly, drift outward from the emoji's path for a
+     "confetti trail" feel. */
+  .reaction-sparkle {
+    position: absolute;
+    bottom: 8px;
+    font-size: 0.85rem;
+    opacity: 0;
+    animation: sparkle-drift var(--sp-duration, 1.1s) ease-out forwards;
+    animation-delay: var(--sp-delay, 0s);
+    will-change: transform, opacity;
+  }
+
+  @keyframes sparkle-drift {
+    0%   { transform: translate(0, 0) scale(0.4); opacity: 0; }
+    20%  { opacity: 1; transform: translate(calc(var(--sp-x, 0px) * 0.3), -30px) scale(1); }
+    100% { transform: translate(var(--sp-x, 0px), -140px) scale(0.5); opacity: 0; }
+  }
+
+  /* ---------- Control bar ---------- */
+  .control-bar {
+    background: transparent;
+    border-top: none;
+    padding: 0 1rem 1.25rem;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    flex-shrink: 0;
+  }
+
+  /* Floating pill housing all control buttons — mirrors the BottomNavBar
+     from the design mockup. */
+  .control-bar-inner {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 1.35rem;
+    background-color: rgba(45, 52, 73, 0.82);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 9999px;
+    padding: 0.7rem 1.5rem;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .control-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    position: relative;
+  }
+
+  .control-label {
+    font-size: 0.66rem;
+    color: var(--mm-text-dim);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .control-btn {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: none;
+    background-color: var(--mm-panel-high);
+    color: #c9d1d9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.05rem;
+    transition: all 0.18s ease;
+  }
+
+  .control-btn:hover { background-color: var(--mm-panel-highest); color: #fff; transform: translateY(-2px); }
+  .control-btn:active { transform: scale(0.92); }
+
+  .control-btn.active { background-color: var(--mm-accent-soft); color: var(--mm-accent); }
+  .control-btn.active:hover { background-color: rgba(37, 99, 235, 0.32); }
+
+  .control-btn.danger { background-color: var(--mm-danger-strong); color: #ffdad6; }
+  .control-btn.danger:hover { background-color: var(--mm-danger); color: #690005; }
+
+  .control-btn.warning { background-color: var(--mm-warning-strong); color: #ffecec; }
+  .control-btn.warning:hover { background-color: var(--mm-warning); color: #40000d; }
+
+  .control-btn.hand-active {
+    background-color: rgba(210, 35, 72, 0.18);
+    color: var(--mm-warning);
+    animation: hand-wobble 1.6s ease-in-out infinite;
+  }
+
+  .control-btn.presenting {
+    background-color: rgba(78, 222, 163, 0.18);
+    color: var(--mm-success);
+  }
+  .control-btn.presenting:hover { background-color: rgba(78, 222, 163, 0.28); }
+
+  .control-notify-dot {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background-color: var(--mm-danger-strong);
+    border: 2px solid var(--mm-panel-highest);
+    display: none;
+  }
+  .control-notify-dot.show { display: block; }
+
+  .divider { width: 1px; height: 44px; background-color: var(--mm-border); align-self: center; }
+
+  /* ---------- Recording audio-quality warning banner ---------- */
+  .rec-warning-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 200, 50, 0.35);
+    background: rgba(40, 30, 10, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: #ffd666;
+    font-size: 0.78rem;
+    font-weight: 500;
+    position: fixed;
+    top: 80px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 90;
+    max-width: 520px;
+    width: calc(100% - 2rem);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    animation: slideDown 0.25s ease;
+  }
+  .rec-warning-banner.show { display: flex; }
+  .rec-warning-banner .rec-warning-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .rec-warning-banner .rec-warning-body { flex: 1; min-width: 0; }
+  .rec-warning-banner .rec-warning-title { font-weight: 700; margin-bottom: 2px; color: #ffe082; }
+  .rec-warning-banner .rec-warning-msg  { color: #c9b96a; line-height: 1.4; }
+  .rec-warning-banner .rec-warning-close {
+    background: none; border: none; color: #c9b96a; font-size: 1.1rem; cursor: pointer; padding: 4px;
+    opacity: 0.7; transition: opacity 0.15s;
+  }
+  .rec-warning-banner .rec-warning-close:hover { opacity: 1; }
+
+  @keyframes slideDown { from { opacity: 0; transform: translateX(-50%) translateY(-12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 860px) {
+    .header-brand .brand-name,
+    .header-user-name { display: none; }
+    .header-divider-vert { display: none; }
+    .meeting-sidebar {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 280px;
+      z-index: 40;
+      transform: translateX(100%);
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.45);
+    }
+    .meeting-sidebar:not(.collapsed) { transform: translateX(0); }
+    .control-label { display: none; }
+    .control-bar-inner { gap: 0.8rem; padding: 0.6rem 1rem; }
+  }
+</style>
+
+<div class="meeting-container">
+
+  <!-- Header -->
+  <header class="meeting-header">
+    <div class="header-brand">
+      <i class="bi bi-camera-video-fill"></i>
+      <span class="brand-name">Smart<span class="brand-name-accent">Meet AI</span></span>
+    </div>
+    <div class="header-divider-vert"></div>
+    <div class="header-left">
+      <div class="meeting-title-row">
+        <h2>{{ room.title }}</h2>
+        <span class="header-divider-dot">•</span>
+        <span class="meeting-timer" id="meeting-timer">00:00</span>
+      </div>
+      <div class="text-muted small room-code-row">
+        <i class="bi bi-hash"></i> <span id="room-code">{{ room.code }}</span>
+        <button class="copy-code-btn" id="copy-code-btn" title="Copy room code">
+          <i class="bi bi-clipboard"></i>
+        </button>
+      </div>
+    </div>
+    <div class="header-right">
+      <div id="presenting-indicator" class="presenting-indicator">
+        <i class="bi bi-easel2-fill"></i>
+        Presenting
+      </div>
+      <div id="rec-indicator" class="rec-indicator">
+        <div class="rec-dot"></div>
+        REC
+      </div>
+      <div id="rec-level-meter" class="rec-level-meter" title="Recording audio level">
+        <span class="rec-level-bar bar-1"></span>
+        <span class="rec-level-bar bar-2"></span>
+        <span class="rec-level-bar bar-3"></span>
+        <span class="rec-level-bar bar-4"></span>
+        <span class="rec-level-bar bar-5"></span>
+      </div>
+      <div class="header-user-pill">
+        <div class="header-user-avatar">{{ username|slice:":1"|upper }}</div>
+        <span class="header-user-name">{{ username }}</span>
+      </div>
+      <div class="dropdown">
+        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+          <i class="bi bi-gear-fill"></i>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+          <li><a class="dropdown-item" href="#">Settings</a></li>
+          <li><a class="dropdown-item" href="#">Report Issue</a></li>
+        </ul>
+      </div>
+    </div>
+  </header>
+
+  <!-- Recording audio-quality warning banner (shown by recorder.js) -->
+  <div id="rec-warning-banner" class="rec-warning-banner" role="alert" aria-live="polite" aria-hidden="true">
+    <span class="rec-warning-icon"><i class="bi bi-exclamation-triangle-fill"></i></span>
+    <div class="rec-warning-body">
+      <div class="rec-warning-title">Audio quality warning</div>
+      <div class="rec-warning-msg">Check your microphone and speak clearly.</div>
+    </div>
+    <button class="rec-warning-close" aria-label="Dismiss">&times;</button>
+  </div>
+
+  <!-- Main Body -->
+  <div class="meeting-body">
+
+    <!-- Hand-raise toast notifications -->
+    <div class="hand-toast-stack" id="hand-toast-stack"></div>
+
+    <!-- Floating reaction layer (thumbs up / heart / funny pop up here) -->
+    <div class="reaction-float-layer" id="reaction-float-layer"></div>
+
+    <!-- Video Area -->
+    <div class="video-area">
+      <div id="video-grid" class="video-grid">
+        <div class="video-tile-wrap" id="local-tile-wrap">
+          <video id="local-video" autoplay playsinline muted class="video-tile"></video>
+          <div class="video-avatar-fallback" id="local-avatar-fallback">
+            <div class="avatar-circle">{{ username|slice:":1"|upper }}</div>
+          </div>
+          <div class="tile-hand-badge" id="local-hand-badge" title="Hand raised">✋</div>
+          <div class="tile-presenting-badge" id="local-presenting-badge" title="Presenting">
+            <i class="bi bi-easel2-fill"></i>
+          </div>
+          <div class="tile-overlay">
+            <span class="tile-mic-icon" id="tile-mic-icon"><i class="bi bi-mic-fill"></i></span>
+            <span class="tile-name" id="local-tile-name" data-base-name="{{ username }} (You)">{{ username }} (You)</span>
+          </div>
+        </div>
+      </div>
+      <!-- Hidden video fed by the raw camera stream (never mirrored, never
+           swapped for a screen share) so sign detection always reads the
+           actual camera feed regardless of what the visible tile shows. -->
+      <video id="sign-detect-video" playsinline muted style="display:none;"></video>
+      <p id="status-line" class="small text-muted mt-2">Connecting...</p>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="meeting-sidebar">
+
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab-btn active" id="tab-btn-participants" data-tab="participants">
+          <i class="bi bi-people-fill"></i> Participants
+        </button>
+        <button class="sidebar-tab-btn" id="tab-btn-chat" data-tab="chat">
+          <i class="bi bi-chat-dots-fill"></i> Chat
+          <span class="tab-badge" id="chat-tab-badge">0</span>
+        </button>
+      </div>
+
+      <!-- Participants panel -->
+      <div class="sidebar-panel active" id="panel-participants">
+        <div class="sidebar-title">
+          <span>Participants</span>
+          <span class="badge bg-secondary" id="participant-count">1</span>
+        </div>
+        <ul id="participant-list" class="list-unstyled mb-0">
+          <li class="participant-item" id="participant-item-self">
+            <div class="participant-item-left">
+              <div class="participant-avatar">{{ username|slice:":1"|upper }}</div>
+              <div>
+                <div class="fw-semibold text-light">{{ username }} (You)</div>
+                <div class="small text-muted">Host</div>
+              </div>
+            </div>
+            <div class="participant-status-icons">
+              <span class="hand-flag" id="participant-self-hand-flag" title="Hand raised">✋</span>
+              <i class="bi bi-mic-fill"></i>
+            </div>
+          </li>
+        </ul>
+
+        <div class="info-card">
+          <p class="mb-1 text-warning fw-bold"><i class="bi bi-lightbulb-fill"></i> Demo Tip</p>
+          <p class="mb-0">Open a second browser (incognito) with another account on the same Wi-Fi to test multi-user functionality.</p>
+        </div>
+
+        <div class="info-card">
+          <p class="mb-0"><i class="bi bi-robot"></i> AI Processing: After ending the meeting, your recording uploads automatically.</p>
+        </div>
+      </div>
+
+      <!-- Chat panel -->
+      <div class="sidebar-panel" id="panel-chat">
+        <div class="sidebar-title">
+          <span>Meeting Chat</span>
+        </div>
+        <div class="sidebar-ai-status">
+          <span class="ai-dot"></span>
+       
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <p class="chat-empty" id="chat-empty-msg">No messages yet. Say hello 👋</p>
+        </div>
+        <div class="chat-image-staged" id="chat-image-staged">
+          <img id="chat-image-staged-thumb" src="" alt="Selected image">
+          <div class="chat-image-staged-info" id="chat-image-staged-info">image.jpg</div>
+          <button type="button" class="chat-image-staged-remove" id="chat-image-staged-remove" aria-label="Remove image">
+            <i class="bi bi-x-lg"></i>
+          </button>
+        </div>
+        <div class="chat-input-row">
+          <button type="button" class="chat-attach-btn" id="chat-attach-btn" aria-label="Attach an image" title="Send an image">
+            <i class="bi bi-image"></i>
+          </button>
+          <input type="file" id="chat-image-input" accept="image/*" style="display:none;">
+          <textarea id="chat-input" class="chat-input" rows="1" placeholder="Type a message…" maxlength="1000"></textarea>
+          <button id="chat-send-btn" class="chat-send-btn" aria-label="Send message" disabled>
+            <i class="bi bi-send-fill"></i>
+          </button>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+
+  <!-- Fullscreen viewer for tapping/clicking a chat image -->
+  <div class="chat-image-lightbox" id="chat-image-lightbox">
+    <button type="button" class="chat-image-lightbox-close" id="chat-image-lightbox-close" aria-label="Close image viewer">
+      <i class="bi bi-x-lg"></i>
+    </button>
+    <img id="chat-image-lightbox-img" src="" alt="Chat image, full size">
+  </div>
+
+  <!-- Control Bar -->
+  <footer class="control-bar">
+    <div class="control-bar-inner">
+      <div class="control-item">
+        <button id="btn-mute" class="control-btn active" aria-label="Toggle Microphone">
+          <i class="bi bi-mic-fill" id="icon-mic"></i>
+        </button>
+        <span class="control-label" id="label-mic">Mute</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-video" class="control-btn active" aria-label="Toggle Camera">
+          <i class="bi bi-camera-video-fill" id="icon-video"></i>
+        </button>
+        <span class="control-label" id="label-video">Stop Video</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-screenshare" class="control-btn" aria-label="Share Screen">
+          <i class="bi bi-display" id="icon-screenshare"></i>
+        </button>
+        <span class="control-label" id="label-screenshare">Share Screen</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-sign-detect" class="control-btn" aria-label="Toggle sign language captions">
+          <i class="bi bi-hand-index-thumb-fill" id="icon-sign-detect"></i>
+        </button>
+        <span class="control-label" id="label-sign-detect">Sign Captions</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-record" class="control-btn" aria-label="Toggle Recording">
+          <i class="bi bi-record-circle" id="icon-rec"></i>
+        </button>
+        <span class="control-label" id="label-rec">Record</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-raise-hand" class="control-btn" aria-label="Raise Hand">
+          <span id="icon-hand">✋</span>
+        </button>
+        <span class="control-label" id="label-hand">Raise Hand</span>
+      </div>
+
+      <div class="control-item" style="position: relative;">
+        <button id="btn-reactions" class="control-btn" aria-label="Send a reaction">
+          <i class="bi bi-emoji-smile-fill"></i>
+        </button>
+        <span class="control-label">React</span>
+        <div class="reaction-popup" id="reaction-popup">
+          <button type="button" class="reaction-option" data-emoji="👍" aria-label="Thumbs up">👍</button>
+          <button type="button" class="reaction-option" data-emoji="❤️" aria-label="Heart">❤️</button>
+          <button type="button" class="reaction-option" data-emoji="😂" aria-label="Funny">😂</button>
+          <button type="button" class="reaction-option" data-emoji="😢" aria-label="Sad">😢</button>
+          <button type="button" class="reaction-option" data-emoji="👏" aria-label="Clap">👏</button>
+        </div>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-chat" class="control-btn" aria-label="Toggle chat panel">
+          <i class="bi bi-chat-dots-fill"></i>
+          <span class="control-notify-dot" id="chat-notify-dot"></span>
+        </button>
+        <span class="control-label">Chat</span>
+      </div>
+
+      <div class="control-item">
+        <button id="btn-participants" class="control-btn" aria-label="Toggle participants panel">
+          <i class="bi bi-people-fill"></i>
+        </button>
+        <span class="control-label">Participants</span>
+      </div>
+
+      <div class="divider"></div>
+
+      {% if is_host %}
+      <div class="control-item">
+        <form method="post" action="{% url 'meetings:end_meeting' meeting_id %}" class="d-inline m-0 p-0" id="end-meeting-form">
+          {% csrf_token %}
+          <button type="submit" class="control-btn danger" aria-label="End Meeting">
+            <i class="bi bi-telephone-x-fill"></i>
+          </button>
+        </form>
+        <span class="control-label">End</span>
+      </div>
+      {% endif %}
+
+      <div class="control-item">
+        <a href="{% url 'meetings:dashboard' %}" class="control-btn {% if is_host %}warning{% else %}danger{% endif %}" aria-label="Leave Room">
+          <i class="bi bi-box-arrow-right"></i>
+        </a>
+        <span class="control-label">{% if is_host %}Leave{% else %}Leave Room{% endif %}</span>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<input type="hidden" id="ws-room" value="{{ room.code }}">
+<input type="hidden" id="user-id" value="{{ user_id }}">
+<input type="hidden" id="username" value="{{ username }}">
+<input type="hidden" id="meeting-id" value="{{ meeting_id }}">
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Ensure Bootstrap Icons are loaded (if not already in base.html)
+  if (!document.querySelector('link[href*="bootstrap-icons.css"]')) {
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css';
+    document.head.appendChild(link);
+  }
+
+  // Ensure the Inter typeface is loaded (matches the SmartMeet AI design system)
+  if (!document.querySelector('link[href*="fonts.googleapis.com/css2?family=Inter"]')) {
+    var interLink = document.createElement('link');
+    interLink.rel = 'stylesheet';
+    interLink.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
+    document.head.appendChild(interLink);
+  }
+
+  window.SMARTMEET = {
+    roomCode: "{{ room.code }}",
+    userId: {{ user_id }},
+    username: "{{ username }}",
+    meetingId: {{ meeting_id }},
+    uploadUrl: "{% url 'meetings:upload_recording' meeting_id %}",
+    csrfToken: "{{ csrf_token }}",
+    wsScheme: window.location.protocol === "https:" ? "wss" : "ws",
+    iceServers: {{ ice_servers|safe }},
+  };
+
+  document.addEventListener('DOMContentLoaded', function () {
+
+    const localVideoEl = document.getElementById('local-video');
+    const localAvatarFallback = document.getElementById('local-avatar-fallback');
+    const tileWrap = document.getElementById('local-tile-wrap');
+    const statusLine = document.getElementById('status-line');
+
+    // ---------------- Mic ----------------
+    const btnMute = document.getElementById('btn-mute');
+    const iconMic = document.getElementById('icon-mic');
+    const labelMic = document.getElementById('label-mic');
+    const tileMicIcon = document.getElementById('tile-mic-icon');
+    let isMuted = false;
+
+    btnMute.addEventListener('click', function () {
+      isMuted = !isMuted;
+      const stream = window.SMARTMEET_LOCAL_STREAM;
+      if (stream) stream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
+
+      btnMute.classList.toggle('active', !isMuted);
+      btnMute.classList.toggle('danger', isMuted);
+      iconMic.classList.toggle('bi-mic-fill', !isMuted);
+      iconMic.classList.toggle('bi-mic-mute-fill', isMuted);
+      labelMic.textContent = isMuted ? 'Unmute' : 'Mute';
+
+      if (tileMicIcon) {
+        tileMicIcon.innerHTML = isMuted
+          ? '<i class="bi bi-mic-mute-fill"></i>'
+          : '<i class="bi bi-mic-fill"></i>';
+        tileMicIcon.classList.toggle('muted', isMuted);
+      }
+    });
+
+    // ---------------- Camera ----------------
+    // Disabling a track with `enabled = false` keeps the camera hardware running
+    // (the indicator light stays on) and just blacks out the frame. To really turn
+    // the camera off, we stop the track (which releases the device) and drop it
+    // from the stream + any active peer connections; turning it back on re-acquires
+    // a fresh track via getUserMedia.
+    const btnVideo = document.getElementById('btn-video');
+    const iconVideo = document.getElementById('icon-video');
+    const labelVideo = document.getElementById('label-video');
+    let isVideoOn = true;
+    let isToggling = false;
+
+    function setVideoUI(on) {
+      btnVideo.classList.toggle('active', on);
+      btnVideo.classList.toggle('danger', !on);
+      iconVideo.classList.toggle('bi-camera-video-fill', on);
+      iconVideo.classList.toggle('bi-camera-video-off-fill', !on);
+      labelVideo.textContent = on ? 'Stop Video' : 'Start Video';
+      localVideoEl.style.display = on ? '' : 'none';
+      localAvatarFallback.style.display = on ? 'none' : 'flex';
+    }
+
+    async function turnCameraOff() {
+      const stream = window.SMARTMEET_LOCAL_STREAM;
+      if (stream) {
+        stream.getVideoTracks().forEach(track => {
+          track.stop();             // releases the device — camera light turns off
+          stream.removeTrack(track);
+        });
+      }
+      // If webrtc.js exposes active peer connections, drop the video sender too
+      // so remote viewers see "camera off" instead of a frozen last frame.
+      if (window.SMARTMEET_PEERS) {
+        Object.values(window.SMARTMEET_PEERS).forEach(pc => {
+          pc.getSenders()
+            .filter(s => s.track && s.track.kind === 'video')
+            .forEach(s => s.replaceTrack(null).catch(() => {}));
+        });
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:camera-off'));
+    }
+
+    async function turnCameraOn() {
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const newTrack = newStream.getVideoTracks()[0];
+      let stream = window.SMARTMEET_LOCAL_STREAM;
+
+      if (stream) {
+        stream.addTrack(newTrack);
+      } else {
+        stream = newStream;
+        window.SMARTMEET_LOCAL_STREAM = stream;
+      }
+      localVideoEl.srcObject = stream;
+
+      if (window.SMARTMEET_PEERS) {
+        Object.values(window.SMARTMEET_PEERS).forEach(pc => {
+          pc._negotiationDone = false;
+          const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+          if (sender) sender.replaceTrack(newTrack).catch(() => {});
+          else pc.addTrack(newTrack, stream);
+        });
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:camera-on', { detail: { track: newTrack } }));
+    }
+
+    btnVideo.addEventListener('click', async function () {
+      if (isToggling) return;
+      isToggling = true;
+      try {
+        if (isVideoOn) {
+          await turnCameraOff();
+          isVideoOn = false;
+          setVideoUI(false);
+        } else {
+          await turnCameraOn();
+          isVideoOn = true;
+          setVideoUI(true);
+        }
+      } catch (err) {
+        console.error('Camera toggle failed:', err);
+        isVideoOn = false;
+        setVideoUI(false);
+        if (statusLine) statusLine.textContent = 'Could not access the camera. Check permissions and try again.';
+      } finally {
+        isToggling = false;
+      }
+    });
+
+    // ---------------- Screen share ----------------
+    // Screen sharing swaps the outgoing video track (camera -> captured
+    // display surface) on every existing peer connection via replaceTrack(),
+    // the same technique the camera toggle above uses — so no renegotiation
+    // is needed and remote participants just see the video content change.
+    const btnScreenShare = document.getElementById('btn-screenshare');
+    const iconScreenShare = document.getElementById('icon-screenshare');
+    const labelScreenShare = document.getElementById('label-screenshare');
+    const presentingIndicator = document.getElementById('presenting-indicator');
+    const localPresentingBadge = document.getElementById('local-presenting-badge');
+    const localTileName = document.getElementById('local-tile-name');
+
+    let isScreenSharing = false;
+    let screenStream = null;
+    let cameraWasOnBeforeShare = true;
+
+    function setScreenShareUI(sharing) {
+      btnScreenShare.classList.toggle('active', sharing);
+      btnScreenShare.classList.toggle('presenting', sharing);
+      iconScreenShare.classList.toggle('bi-display', !sharing);
+      iconScreenShare.classList.toggle('bi-stop-circle-fill', sharing);
+      labelScreenShare.textContent = sharing ? 'Stop Sharing' : 'Share Screen';
+      if (presentingIndicator) presentingIndicator.style.display = sharing ? 'flex' : 'none';
+      if (localPresentingBadge) localPresentingBadge.classList.toggle('show', sharing);
+      if (tileWrap) tileWrap.classList.toggle('screen-sharing', sharing);
+      if (localTileName) {
+        const base = localTileName.getAttribute('data-base-name') || localTileName.textContent;
+        localTileName.textContent = base + (sharing ? ' — Screen' : '');
+      }
+    }
+
+    function broadcastScreenShareState(sharing) {
+      const payload = { type: 'screen-share', userId: me.userId, username: me.username, sharing, ts: Date.now() };
+      if (window.SMARTMEET_WS && window.SMARTMEET_WS.readyState === 1) {
+        window.SMARTMEET_WS.send(JSON.stringify(payload));
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:screen-share-send', { detail: payload }));
+    }
+
+    function replaceOutgoingVideoTrack(track, fallbackStream) {
+      const peersObj = window.SMARTMEET_PEERS || {};
+      Object.values(peersObj).forEach(pc => {
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+        if (sender) sender.replaceTrack(track).catch(() => {});
+        else if (track) pc.addTrack(track, fallbackStream);
+      });
+    }
+
+    async function startScreenShare() {
+      let captured;
+      try {
+        captured = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      } catch (err) {
+        console.warn('Screen share cancelled or failed:', err);
+        return;
+      }
+
+      screenStream = captured;
+      const screenTrack = captured.getVideoTracks()[0];
+      cameraWasOnBeforeShare = isVideoOn;
+
+      replaceOutgoingVideoTrack(screenTrack, captured);
+
+      localVideoEl.srcObject = captured;
+      localVideoEl.style.display = '';
+      localAvatarFallback.style.display = 'none';
+
+      // Catch the browser's own built-in "Stop sharing" control (not just
+      // our button), and revert automatically when that fires.
+      screenTrack.addEventListener('ended', () => {
+        if (isScreenSharing) stopScreenShare();
+      });
+
+      isScreenSharing = true;
+      setScreenShareUI(true);
+      broadcastScreenShareState(true);
+    }
+
+    async function stopScreenShare() {
+      if (screenStream) {
+        screenStream.getTracks().forEach(t => t.stop());
+        screenStream = null;
+      }
+
+      if (cameraWasOnBeforeShare) {
+        try {
+          const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          const camTrack = camStream.getVideoTracks()[0];
+          let stream = window.SMARTMEET_LOCAL_STREAM;
+
+          if (stream) {
+            stream.getVideoTracks().forEach(t => { t.stop(); stream.removeTrack(t); });
+            stream.addTrack(camTrack);
+          } else {
+            stream = camStream;
+            window.SMARTMEET_LOCAL_STREAM = stream;
+          }
+
+          localVideoEl.srcObject = stream;
+          localVideoEl.style.display = '';
+          localAvatarFallback.style.display = 'none';
+          replaceOutgoingVideoTrack(camTrack, stream);
+          isVideoOn = true;
+          setVideoUI(true);
+        } catch (err) {
+          console.error('Could not restore camera after screen share:', err);
+          isVideoOn = false;
+          setVideoUI(false);
+        }
+      } else {
+        localVideoEl.srcObject = null;
+        localAvatarFallback.style.display = 'flex';
+        replaceOutgoingVideoTrack(null, null);
+        isVideoOn = false;
+        setVideoUI(false);
+      }
+
+      isScreenSharing = false;
+      setScreenShareUI(false);
+      broadcastScreenShareState(false);
+    }
+
+    if (btnScreenShare) {
+      btnScreenShare.addEventListener('click', async function () {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+          if (statusLine) statusLine.textContent = 'Screen sharing is not supported in this browser.';
+          return;
+        }
+        if (isScreenSharing) {
+          await stopScreenShare();
+        } else {
+          await startScreenShare();
+        }
+      });
+    }
+
+    // Incoming screen-share state from other participants, relayed by
+    // webrtc.js as:
+    //   document.dispatchEvent(new CustomEvent('smartmeet:screen-share', {
+    //     detail: { userId, username, sharing }
+    //   }))
+    // (webrtc.js already updates the tile label + presenting badge itself;
+    // this listener is here for any other UI — e.g. a future "pin presenter"
+    // feature — that wants to react to the same event.)
+    document.addEventListener('smartmeet:screen-share', function (e) {
+      const d = e.detail || {};
+      if (d.userId === me.userId) return;
+      if (statusLine) {
+        statusLine.textContent = d.sharing ? `${d.username} started presenting` : `${d.username} stopped presenting`;
+      }
+    });
+
+    // ---------------- Sign Reactions (Beta) ----------------
+    // IMPORTANT SCOPE NOTE: this is NOT full sign-language translation.
+    // There is no free, browser-loadable model today that understands
+    // continuous ASL/BSL grammar, fingerspelling, or motion-based signs.
+    // What this does is run MediaPipe's off-the-shelf GestureRecognizer
+    // (a small, well-supported model bundled by Google) against the raw
+    // camera feed and map its ~7 recognized static hand poses to a small
+    // burst of floating emoji — reusing the exact same visual as the
+    // manual Reactions button — instead of a running text caption. It's a
+    // starting point for basic, glanceable reactions — not a substitute
+    // for a real interpreter. Swap GESTURE_EMOJI_MAP / the model itself
+    // later if a larger vocabulary becomes available.
+    const btnSignDetect = document.getElementById('btn-sign-detect');
+    const iconSignDetect = document.getElementById('icon-sign-detect');
+    const labelSignDetect = document.getElementById('label-sign-detect');
+    const signDetectVideo = document.getElementById('sign-detect-video');
+
+    // Each recognized gesture maps to one or more emoji. Gestures mapped to
+    // multiple emoji (Hello, I love you) float up as a little multi-emoji
+    // burst instead of a single icon.
+    const GESTURE_EMOJI_MAP = {
+      Thumb_Up: ['👍'],
+      Thumb_Down: ['👎'],
+      Open_Palm: ['👋', '👋', '👋'],       // Hello — a few waves
+      Closed_Fist: ['✊'],
+      Victory: ['✌️'],
+      Pointing_Up: ['☝️'],
+      ILoveYou: ['❤️', '❤️', '❤️'],        // I love you — a few hearts
+    };
+    const GESTURE_CONFIDENCE_MIN = 0.6;
+    const GESTURE_HOLD_MS = 550;          // how long a sign must be held before it triggers
+    const GESTURE_REPEAT_GAP_MS = 1500;   // minimum gap before the same gesture can trigger again
+    const GESTURE_EMOJI_STAGGER_MS = 180; // delay between each emoji in a multi-emoji burst
+
+    let gestureRecognizer = null;
+    let signDetectLoading = false;
+    let signDetectActive = false;
+    let signDetectRAF = null;
+
+    let lastTriggeredGesture = '';
+    let lastTriggeredAt = 0;
+    let pendingGesture = null;
+    let pendingGestureSince = 0;
+
+    function setSignDetectUI(state) {
+      // state: 'idle' | 'loading' | 'active'
+      btnSignDetect.classList.toggle('sign-loading', state === 'loading');
+      btnSignDetect.classList.toggle('sign-active', state === 'active');
+      btnSignDetect.classList.toggle('active', state === 'active');
+      labelSignDetect.textContent = state === 'loading' ? 'Loading…' : (state === 'active' ? 'Stop Captions' : 'Sign Captions');
+      iconSignDetect.className = state === 'active'
+        ? 'bi bi-hand-index-thumb-fill'
+        : 'bi bi-hand-index-thumb-fill';
+    }
+
+    function broadcastSignReaction(emojis) {
+      const payload = { type: 'sign-caption', userId: me.userId, username: me.username, emojis, ts: Date.now() };
+      if (window.SMARTMEET_WS && window.SMARTMEET_WS.readyState === 1) {
+        window.SMARTMEET_WS.send(JSON.stringify(payload));
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:sign-caption-send', { detail: payload }));
+    }
+
+    // Floats each emoji in the burst up through the shared reaction layer,
+    // staggered slightly so they don't all overlap perfectly.
+    // spawnFloatingReaction() itself is defined further down, in the
+    // Reactions section — function declarations are hoisted, so it's
+    // safe to call it here.
+    function spawnGestureBurst(emojis) {
+      (emojis || []).forEach((emoji, i) => {
+        setTimeout(() => spawnFloatingReaction(emoji), i * GESTURE_EMOJI_STAGGER_MS);
+      });
+    }
+
+    async function loadGestureRecognizer() {
+      // Loaded lazily (only when the user actually turns this on) since it
+      // pulls a wasm runtime + model file from CDN — no point paying that
+      // cost for meetings that never use it.
+      const visionModule = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+      const { GestureRecognizer, FilesetResolver } = visionModule;
+      const filesetResolver = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      return GestureRecognizer.createFromOptions(filesetResolver, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task',
+          delegate: 'GPU',
+        },
+        runningMode: 'VIDEO',
+        numHands: 1,
+      });
+    }
+
+    function triggerGestureReaction(gestureKey) {
+      const now = Date.now();
+      const isImmediateRepeat = gestureKey === lastTriggeredGesture && (now - lastTriggeredAt) < GESTURE_REPEAT_GAP_MS;
+      if (isImmediateRepeat) return;
+
+      lastTriggeredGesture = gestureKey;
+      lastTriggeredAt = now;
+
+      const emojis = GESTURE_EMOJI_MAP[gestureKey];
+      if (!emojis || !emojis.length) return;
+
+      spawnGestureBurst(emojis);
+      broadcastSignReaction(emojis);
+    }
+
+    function handleGestureResult(result) {
+      const top = result && result.gestures && result.gestures[0] && result.gestures[0][0];
+      const category = top && top.categoryName;
+      const score = top ? top.score : 0;
+
+      const recognizedGesture = (category && category !== 'None' && score >= GESTURE_CONFIDENCE_MIN && GESTURE_EMOJI_MAP[category])
+        ? category
+        : null;
+
+      if (!recognizedGesture) {
+        pendingGesture = null;
+        return;
+      }
+
+      if (pendingGesture !== recognizedGesture) {
+        pendingGesture = recognizedGesture;
+        pendingGestureSince = Date.now();
+        return;
+      }
+
+      if (Date.now() - pendingGestureSince >= GESTURE_HOLD_MS) {
+        triggerGestureReaction(recognizedGesture);
+        pendingGesture = null; // require re-holding before it can trigger again
+      }
+    }
+
+    function signDetectLoop() {
+      if (!signDetectActive || !gestureRecognizer) return;
+      if (signDetectVideo.readyState >= 2) {
+        try {
+          const result = gestureRecognizer.recognizeForVideo(signDetectVideo, performance.now());
+          handleGestureResult(result);
+        } catch (err) {
+          console.warn('Gesture recognition frame failed:', err);
+        }
+      }
+      signDetectRAF = requestAnimationFrame(signDetectLoop);
+    }
+
+    async function startSignDetect() {
+      const camStream = window.SMARTMEET_LOCAL_STREAM;
+      if (!camStream || camStream.getVideoTracks().length === 0) {
+        if (statusLine) statusLine.textContent = 'Turn your camera on to use sign captions.';
+        return;
+      }
+
+      setSignDetectUI('loading');
+      signDetectLoading = true;
+      try {
+        if (!gestureRecognizer) {
+          gestureRecognizer = await loadGestureRecognizer();
+        }
+      } catch (err) {
+        console.error('Could not load sign detection model:', err);
+        if (statusLine) statusLine.textContent = 'Sign captions could not load — check your connection and try again.';
+        setSignDetectUI('idle');
+        signDetectLoading = false;
+        return;
+      }
+      signDetectLoading = false;
+
+      // Bind the hidden detection video to the raw camera stream directly —
+      // independent of whatever the visible local-video element is showing
+      // (mirrored camera, screen share, or off).
+      signDetectVideo.srcObject = camStream;
+      try { await signDetectVideo.play(); } catch (_) {}
+
+      lastTriggeredGesture = '';
+      pendingGesture = null;
+
+      signDetectActive = true;
+      setSignDetectUI('active');
+      signDetectLoop();
+    }
+
+    function stopSignDetect() {
+      signDetectActive = false;
+      if (signDetectRAF) cancelAnimationFrame(signDetectRAF);
+      signDetectRAF = null;
+      signDetectVideo.srcObject = null;
+      lastTriggeredGesture = '';
+      pendingGesture = null;
+      setSignDetectUI('idle');
+    }
+
+    if (btnSignDetect) {
+      btnSignDetect.addEventListener('click', async function () {
+        if (signDetectLoading) return;
+        if (signDetectActive) {
+          stopSignDetect();
+        } else {
+          await startSignDetect();
+        }
+      });
+    }
+
+    // If the camera gets turned off while sign captions are running, there's
+    // nothing left to detect — stop cleanly instead of spinning on a dead feed.
+    document.addEventListener('smartmeet:camera-off', function () {
+      if (signDetectActive) stopSignDetect();
+    });
+
+    // Incoming gesture reactions from other participants, relayed by
+    // webrtc.js as:
+    //   document.dispatchEvent(new CustomEvent('smartmeet:sign-caption', {
+    //     detail: { userId, username, emojis }
+    //   }))
+    // Float their emoji burst on our screen too.
+    document.addEventListener('smartmeet:sign-caption', function (e) {
+      const d = e.detail || {};
+      if (d.userId === me.userId) return;
+      spawnGestureBurst(d.emojis);
+    });
+
+    // ---------------- Sidebar open/close + tab switching ----------------
+    const sidebar = document.querySelector('.meeting-sidebar');
+    const btnParticipants = document.getElementById('btn-participants');
+    const btnChat = document.getElementById('btn-chat');
+    const chatNotifyDot = document.getElementById('chat-notify-dot');
+    const chatTabBadge = document.getElementById('chat-tab-badge');
+    const tabBtnParticipants = document.getElementById('tab-btn-participants');
+    const tabBtnChat = document.getElementById('tab-btn-chat');
+    const panelParticipants = document.getElementById('panel-participants');
+    const panelChat = document.getElementById('panel-chat');
+
+    let unreadChat = 0;
+
+    function updateChatBadge() {
+      if (chatNotifyDot) chatNotifyDot.classList.toggle('show', unreadChat > 0);
+      if (chatTabBadge) {
+        chatTabBadge.textContent = unreadChat > 99 ? '99+' : String(unreadChat);
+        chatTabBadge.classList.toggle('show', unreadChat > 0);
+      }
+    }
+
+    function openSidebarOnTab(tab) {
+      sidebar.classList.remove('collapsed');
+      btnParticipants.classList.toggle('active', tab === 'participants');
+      btnChat.classList.toggle('active', tab === 'chat');
+      tabBtnParticipants.classList.toggle('active', tab === 'participants');
+      tabBtnChat.classList.toggle('active', tab === 'chat');
+      panelParticipants.classList.toggle('active', tab === 'participants');
+      panelChat.classList.toggle('active', tab === 'chat');
+      if (tab === 'chat') {
+        unreadChat = 0;
+        updateChatBadge();
+        scrollChatToBottom();
+      }
+    }
+
+    function toggleSidebarOnTab(tab) {
+      const isOpen = !sidebar.classList.contains('collapsed');
+      const currentlyOnTab = (tab === 'participants' && panelParticipants.classList.contains('active')) ||
+                              (tab === 'chat' && panelChat.classList.contains('active'));
+      if (isOpen && currentlyOnTab) {
+        sidebar.classList.add('collapsed');
+        btnParticipants.classList.remove('active');
+        btnChat.classList.remove('active');
+      } else {
+        openSidebarOnTab(tab);
+      }
+    }
+
+    if (btnParticipants && sidebar) {
+      btnParticipants.addEventListener('click', () => toggleSidebarOnTab('participants'));
+    }
+    if (btnChat && sidebar) {
+      btnChat.addEventListener('click', () => toggleSidebarOnTab('chat'));
+    }
+    tabBtnParticipants.addEventListener('click', () => openSidebarOnTab('participants'));
+    tabBtnChat.addEventListener('click', () => openSidebarOnTab('chat'));
+
+    // ---------------- Chat ----------------
+    const chatMessages = document.getElementById('chat-messages');
+    const chatEmptyMsg = document.getElementById('chat-empty-msg');
+    const chatInput = document.getElementById('chat-input');
+    const chatSendBtn = document.getElementById('chat-send-btn');
+    const chatAttachBtn = document.getElementById('chat-attach-btn');
+    const chatImageInput = document.getElementById('chat-image-input');
+    const chatImageStaged = document.getElementById('chat-image-staged');
+    const chatImageStagedThumb = document.getElementById('chat-image-staged-thumb');
+    const chatImageStagedInfo = document.getElementById('chat-image-staged-info');
+    const chatImageStagedRemove = document.getElementById('chat-image-staged-remove');
+    const chatImageLightbox = document.getElementById('chat-image-lightbox');
+    const chatImageLightboxImg = document.getElementById('chat-image-lightbox-img');
+    const chatImageLightboxClose = document.getElementById('chat-image-lightbox-close');
+    const me = window.SMARTMEET;
+
+    // Images are sent as data URLs over the same signaling websocket as
+    // everything else in chat — there's no separate upload endpoint. To keep
+    // that reasonable, every image is downscaled + re-encoded as JPEG on the
+    // client before it's ever staged or sent (see resizeImageFile below).
+    const CHAT_IMAGE_MAX_DIMENSION = 1280;   // longest edge, in px, after resize
+    const CHAT_IMAGE_JPEG_QUALITY = 0.72;
+    const CHAT_IMAGE_MAX_BYTES = 2 * 1024 * 1024; // ~2MB post-compression safety cap
+
+    let pendingImage = null; // { dataUrl, name } | null
+
+    function scrollChatToBottom() {
+      if (chatMessages) chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function formatTime(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // Renders a chat bubble. `fromSelf` controls right/left alignment.
+    // `image`, if present, is a data URL shown above/instead of the text.
+    function renderChatMessage({ username, text, image, fromSelf, system, time }) {
+      if (chatEmptyMsg) chatEmptyMsg.style.display = 'none';
+
+      const wrap = document.createElement('div');
+      wrap.className = 'chat-msg' + (fromSelf ? ' own' : '') + (system ? ' system' : '');
+
+      if (!system) {
+        const meta = document.createElement('div');
+        meta.className = 'chat-msg-meta';
+        meta.innerHTML = `<span>${escapeHtml(fromSelf ? 'You' : username)}</span><span>${formatTime(time || new Date())}</span>`;
+        wrap.appendChild(meta);
+      }
+
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-msg-bubble' + (image ? ' has-image' : '');
+
+      if (image) {
+        const img = document.createElement('img');
+        img.className = 'chat-msg-image';
+        img.src = image;
+        img.alt = text ? text : 'Shared image';
+        img.addEventListener('click', () => openImageLightbox(image));
+        bubble.appendChild(img);
+        if (text) {
+          const caption = document.createElement('div');
+          caption.className = 'chat-msg-image-caption';
+          caption.textContent = text;
+          bubble.appendChild(caption);
+        }
+      } else {
+        bubble.textContent = text;
+      }
+
+      wrap.appendChild(bubble);
+      chatMessages.appendChild(wrap);
+      scrollChatToBottom();
+    }
+
+    function openImageLightbox(dataUrl) {
+      if (!chatImageLightbox || !chatImageLightboxImg) return;
+      chatImageLightboxImg.src = dataUrl;
+      chatImageLightbox.classList.add('show');
+    }
+
+    function closeImageLightbox() {
+      if (!chatImageLightbox) return;
+      chatImageLightbox.classList.remove('show');
+      chatImageLightboxImg.src = '';
+    }
+
+    if (chatImageLightboxClose) chatImageLightboxClose.addEventListener('click', closeImageLightbox);
+    if (chatImageLightbox) {
+      chatImageLightbox.addEventListener('click', function (e) {
+        if (e.target === chatImageLightbox) closeImageLightbox();
+      });
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeImageLightbox();
+    });
+
+    function updateSendBtnState() {
+      chatSendBtn.disabled = chatInput.value.trim().length === 0 && !pendingImage;
+    }
+
+    // Downscales + re-encodes an image file client-side so it's small enough
+    // to travel over the signaling websocket as a data URL. Longest edge is
+    // capped at CHAT_IMAGE_MAX_DIMENSION and it's always re-encoded as JPEG.
+    function resizeImageFile(file) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+          let { width, height } = img;
+          const longestEdge = Math.max(width, height);
+          if (longestEdge > CHAT_IMAGE_MAX_DIMENSION) {
+            const scale = CHAT_IMAGE_MAX_DIMENSION / longestEdge;
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', CHAT_IMAGE_JPEG_QUALITY));
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          reject(new Error('Could not load image'));
+        };
+        img.src = objectUrl;
+      });
+    }
+
+    function stageImage(dataUrl, name) {
+      pendingImage = { dataUrl, name };
+      if (chatImageStagedThumb) chatImageStagedThumb.src = dataUrl;
+      if (chatImageStagedInfo) chatImageStagedInfo.textContent = name || 'image.jpg';
+      if (chatImageStaged) chatImageStaged.classList.add('show');
+      updateSendBtnState();
+    }
+
+    function clearStagedImage() {
+      pendingImage = null;
+      if (chatImageStaged) chatImageStaged.classList.remove('show');
+      if (chatImageStagedThumb) chatImageStagedThumb.src = '';
+      if (chatImageInput) chatImageInput.value = '';
+      updateSendBtnState();
+    }
+
+    if (chatAttachBtn && chatImageInput) {
+      chatAttachBtn.addEventListener('click', () => chatImageInput.click());
+
+      chatImageInput.addEventListener('change', async function () {
+        const file = chatImageInput.files && chatImageInput.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          if (statusLine) statusLine.textContent = 'Please choose an image file.';
+          chatImageInput.value = '';
+          return;
+        }
+        try {
+          const dataUrl = await resizeImageFile(file);
+          if (dataUrl.length > CHAT_IMAGE_MAX_BYTES) {
+            if (statusLine) statusLine.textContent = 'That image is too large even after compression — try a smaller one.';
+            chatImageInput.value = '';
+            return;
+          }
+          stageImage(dataUrl, file.name);
+        } catch (err) {
+          console.error('Image processing failed:', err);
+          if (statusLine) statusLine.textContent = 'Could not process that image.';
+          chatImageInput.value = '';
+        }
+      });
+    }
+
+    if (chatImageStagedRemove) {
+      chatImageStagedRemove.addEventListener('click', clearStagedImage);
+    }
+
+    chatInput.addEventListener('input', function () {
+      updateSendBtnState();
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 90) + 'px';
+    });
+
+    chatInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+
+    chatSendBtn.addEventListener('click', sendChatMessage);
+
+    function sendChatMessage() {
+      const text = chatInput.value.trim();
+      const image = pendingImage ? pendingImage.dataUrl : null;
+      if (!text && !image) return;
+
+      renderChatMessage({ username: me.username, text, image, fromSelf: true, time: new Date() });
+
+      // Hand off to the signaling layer (webrtc.js / websocket) if available,
+      // so every other joined participant receives this message in real time.
+      const payload = { type: 'chat', userId: me.userId, username: me.username, text, image, ts: Date.now() };
+      if (window.SMARTMEET_WS && window.SMARTMEET_WS.readyState === 1) {
+        window.SMARTMEET_WS.send(JSON.stringify(payload));
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:chat-send', { detail: payload }));
+
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+      clearStagedImage();
+      updateSendBtnState();
+    }
+
+    // Incoming chat messages from other participants should be dispatched by
+    // webrtc.js (or any websocket handler) as: 
+    //   document.dispatchEvent(new CustomEvent('smartmeet:chat-message', {
+    //     detail: { userId, username, text, image, ts }
+    //   }))
+    document.addEventListener('smartmeet:chat-message', function (e) {
+      const d = e.detail || {};
+      if (d.userId === me.userId) return; // avoid double-render of own message
+      renderChatMessage({ username: d.username, text: d.text, image: d.image, fromSelf: false, time: d.ts ? new Date(d.ts) : new Date() });
+
+      const isChatOpen = !sidebar.classList.contains('collapsed') && panelChat.classList.contains('active');
+      if (!isChatOpen) {
+        unreadChat += 1;
+        updateChatBadge();
+      }
+    });
+
+    // ---------------- Raise hand ----------------
+    const btnRaiseHand = document.getElementById('btn-raise-hand');
+    const labelHand = document.getElementById('label-hand');
+    const localHandBadge = document.getElementById('local-hand-badge');
+    const selfHandFlag = document.getElementById('participant-self-hand-flag');
+    const toastStack = document.getElementById('hand-toast-stack');
+    let handRaised = false;
+
+    function showHandToast(name) {
+      if (!toastStack) return;
+      const toast = document.createElement('div');
+      toast.className = 'hand-toast';
+      toast.innerHTML = `<span class="hand-emoji">✋</span><span>Hand raised by <strong>${escapeHtml(name)}</strong></span>`;
+      toastStack.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+
+    function setLocalHandUI(raised) {
+      btnRaiseHand.classList.toggle('hand-active', raised);
+      labelHand.textContent = raised ? 'Lower Hand' : 'Raise Hand';
+      if (localHandBadge) localHandBadge.classList.toggle('show', raised);
+      if (selfHandFlag) selfHandFlag.classList.toggle('show', raised);
+    }
+
+    btnRaiseHand.addEventListener('click', function () {
+      handRaised = !handRaised;
+      setLocalHandUI(handRaised);
+
+      if (handRaised) {
+        showHandToast(me.username + ' (You)');
+      }
+
+      const payload = { type: 'hand-raise', userId: me.userId, username: me.username, raised: handRaised, ts: Date.now() };
+      if (window.SMARTMEET_WS && window.SMARTMEET_WS.readyState === 1) {
+        window.SMARTMEET_WS.send(JSON.stringify(payload));
+      }
+      document.dispatchEvent(new CustomEvent('smartmeet:hand-raise-send', { detail: payload }));
+    });
+
+    // Incoming hand-raise events from other participants should be dispatched
+    // by webrtc.js (or any websocket handler) as:
+    //   document.dispatchEvent(new CustomEvent('smartmeet:hand-raise', {
+    //     detail: { userId, username, raised }
+    //   }))
+    document.addEventListener('smartmeet:hand-raise', function (e) {
+      const d = e.detail || {};
+      if (d.userId === me.userId) return;
+      if (d.raised) {
+        showHandToast(d.username);
+      }
+      // Reflect on the matching participant list item and video tile, if present.
+      const flag = document.querySelector(`[data-hand-flag-for="${d.userId}"]`);
+      if (flag) flag.classList.toggle('show', !!d.raised);
+      const badge = document.querySelector(`[data-hand-badge-for="${d.userId}"]`);
+      if (badge) badge.classList.toggle('show', !!d.raised);
+    });
+
+    // ---------------- Reactions (thumbs up / heart / funny) ----------------
+    const btnReactions = document.getElementById('btn-reactions');
+    const reactionPopup = document.getElementById('reaction-popup');
+    const reactionFloatLayer = document.getElementById('reaction-float-layer');
+
+    // IMPORTANT: `backdrop-filter` (used on .control-bar-inner for the glass
+    // pill effect) creates a new *containing block* for any descendant with
+    // `position: fixed` — per spec, filter/backdrop-filter behave like
+    // `transform` here. That meant our "fixed" popup was actually being
+    // positioned/clipped relative to the pill, not the viewport, which is
+    // why it was rendering far off (dragging in a phantom scroll area)
+    // instead of floating above the React button. Moving the popup to be a
+    // direct child of <body> gets it out from under that filtered ancestor
+    // entirely, so `position: fixed` behaves normally again. Event
+    // listeners stay attached since we keep the same element reference.
+    if (reactionPopup && reactionPopup.parentElement !== document.body) {
+      document.body.appendChild(reactionPopup);
+    }
+
+    const SPARKLE_CHARS = ['✨', '✦', '•', '·'];
+
+    // Since the popup is `position: fixed` (see the CSS comment above), we
+    // compute its on-screen coordinates ourselves from the React button's
+    // actual bounding rect each time it's about to be shown. This is what
+    // lets it render above the control bar without being clipped by the
+    // pill's overflow container, regardless of where the button sits or
+    // how the layout reflows on resize.
+    function positionReactionPopup() {
+      const btnRect = btnReactions.getBoundingClientRect();
+
+      // Measure the popup's own size first (rendered off-screen at 0,0
+      // with visibility hidden) since a never-shown fixed element has no
+      // reliable box to read dimensions from otherwise.
+      reactionPopup.style.left = '0px';
+      reactionPopup.style.top = '0px';
+      reactionPopup.style.visibility = 'hidden';
+      reactionPopup.style.display = 'flex';
+      const popupRect = reactionPopup.getBoundingClientRect();
+      reactionPopup.style.visibility = '';
+      reactionPopup.style.display = '';
+
+      const centerX = btnRect.left + btnRect.width / 2;
+      let left = centerX - popupRect.width / 2;
+      // Clamp so it can't run off the left/right edge of the viewport
+      left = Math.max(8, Math.min(left, window.innerWidth - popupRect.width - 8));
+      const top = btnRect.top - popupRect.height - 12; // 12px gap above the button
+
+      reactionPopup.style.left = left + 'px';
+      reactionPopup.style.top = top + 'px';
+    }
+
+    // Spawns one emoji that pops in and floats upward through the video area
+    // along a curved, wobbling, rotating multi-waypoint path, plus a quick
+    // burst ring at the origin and a handful of trailing sparkle particles.
+    // Called for the sender's own click, for reactions received from other
+    // participants, and for each emoji in a recognized sign-gesture burst.
+    function spawnFloatingReaction(emoji) {
+      if (!reactionFloatLayer) return;
+      const originLeftPct = 38 + Math.random() * 24; // 38%–62% across the layer
+
+      // Burst ring flash at the origin point
+      const ring = document.createElement('span');
+      ring.className = 'reaction-burst-ring';
+      ring.style.left = originLeftPct + '%';
+      reactionFloatLayer.appendChild(ring);
+      setTimeout(() => ring.remove(), 650);
+
+      // Main emoji, riding a randomized 5-waypoint path
+      const el = document.createElement('span');
+      el.className = 'floating-reaction';
+      el.textContent = emoji;
+      el.style.left = originLeftPct + '%';
+
+      const rand = (min, max) => Math.random() * (max - min) + min;
+      el.style.setProperty('--x1', rand(-18, 18).toFixed(0) + 'px');
+      el.style.setProperty('--x2', rand(-45, 45).toFixed(0) + 'px');
+      el.style.setProperty('--x3', rand(-70, 70).toFixed(0) + 'px');
+      el.style.setProperty('--x4', rand(-90, 90).toFixed(0) + 'px');
+      el.style.setProperty('--x5', rand(-110, 110).toFixed(0) + 'px');
+      el.style.setProperty('--r1', rand(-14, 14).toFixed(0) + 'deg');
+      el.style.setProperty('--r2', rand(-14, 14).toFixed(0) + 'deg');
+      el.style.setProperty('--r3', rand(-14, 14).toFixed(0) + 'deg');
+      el.style.setProperty('--r4', rand(-10, 10).toFixed(0) + 'deg');
+      el.style.setProperty('--r5', rand(-6, 6).toFixed(0) + 'deg');
+      el.style.setProperty('--fr-size', rand(1.8, 2.5).toFixed(2) + 'rem');
+      el.style.setProperty('--fr-duration', rand(2.3, 2.9).toFixed(2) + 's');
+
+      reactionFloatLayer.appendChild(el);
+      setTimeout(() => el.remove(), 3000);
+
+      // Trailing sparkles — a handful of small particles staggered around
+      // the main emoji for a confetti-trail feel.
+      const sparkleCount = 4 + Math.floor(Math.random() * 3); // 4–6
+      for (let i = 0; i < sparkleCount; i++) {
+        const sp = document.createElement('span');
+        sp.className = 'reaction-sparkle';
+        sp.textContent = SPARKLE_CHARS[Math.floor(Math.random() * SPARKLE_CHARS.length)];
+        sp.style.left = (originLeftPct + rand(-4, 4)) + '%';
+        sp.style.setProperty('--sp-x', rand(-60, 60).toFixed(0) + 'px');
+        sp.style.setProperty('--sp-duration', rand(0.8, 1.4).toFixed(2) + 's');
+        sp.style.setProperty('--sp-delay', rand(0, 0.5).toFixed(2) + 's');
+        reactionFloatLayer.appendChild(sp);
+        setTimeout(() => sp.remove(), 2000);
+      }
+
+      // Clap gets a little extra flourish — a second slightly offset emoji
+      // a beat later, like two hands coming together repeatedly.
+      if (emoji === '👏') {
+        setTimeout(() => {
+          const echo = document.createElement('span');
+          echo.className = 'floating-reaction';
+          echo.textContent = emoji;
+          echo.style.left = (originLeftPct + rand(-6, 6)) + '%';
+          echo.style.setProperty('--x1', rand(-18, 18).toFixed(0) + 'px');
+          echo.style.setProperty('--x2', rand(-45, 45).toFixed(0) + 'px');
+          echo.style.setProperty('--x3', rand(-70, 70).toFixed(0) + 'px');
+          echo.style.setProperty('--x4', rand(-90, 90).toFixed(0) + 'px');
+          echo.style.setProperty('--x5', rand(-110, 110).toFixed(0) + 'px');
+          echo.style.setProperty('--fr-size', rand(1.6, 2.1).toFixed(2) + 'rem');
+          echo.style.setProperty('--fr-duration', rand(2.1, 2.6).toFixed(2) + 's');
+          reactionFloatLayer.appendChild(echo);
+          setTimeout(() => echo.remove(), 3000);
+        }, 220);
+      }
+    }
+
+    if (btnReactions && reactionPopup) {
+      btnReactions.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const willShow = !reactionPopup.classList.contains('show');
+        if (willShow) positionReactionPopup();
+        reactionPopup.classList.toggle('show');
+      });
+      // Prevent the document-level "close popup" click handler below from
+      // firing when clicking inside the popup itself.
+      reactionPopup.addEventListener('click', function (e) { e.stopPropagation(); });
+      document.addEventListener('click', function () {
+        reactionPopup.classList.remove('show');
+      });
+      // Keep it correctly placed if the window resizes while it's open
+      // (e.g. rotating a phone, or a desktop window resize).
+      window.addEventListener('resize', function () {
+        if (reactionPopup.classList.contains('show')) positionReactionPopup();
+      });
+
+      reactionPopup.querySelectorAll('.reaction-option').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const emoji = this.getAttribute('data-emoji');
+          // Popup stays open here on purpose — the outside-click handler
+          // above is what closes it, so you can tap the same or different
+          // emojis repeatedly without it snapping shut after every tap.
+
+          // Sender side: pop it immediately, don't wait on the round trip.
+          spawnFloatingReaction(emoji);
+
+          const payload = { type: 'reaction', userId: me.userId, username: me.username, emoji, ts: Date.now() };
+          if (window.SMARTMEET_WS && window.SMARTMEET_WS.readyState === 1) {
+            window.SMARTMEET_WS.send(JSON.stringify(payload));
+          }
+          document.dispatchEvent(new CustomEvent('smartmeet:reaction-send', { detail: payload }));
+        });
+      });
+    }
+
+    // Incoming reactions from other participants should be dispatched by
+    // webrtc.js (or any websocket handler) as:
+    //   document.dispatchEvent(new CustomEvent('smartmeet:reaction', {
+    //     detail: { userId, username, emoji }
+    //   }))
+    document.addEventListener('smartmeet:reaction', function (e) {
+      const d = e.detail || {};
+      if (d.userId === me.userId) return; // already spawned on send
+      spawnFloatingReaction(d.emoji);
+    });
+
+    // ---------------- Copy room code ----------------
+    const copyBtn = document.getElementById('copy-code-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        const code = document.getElementById('room-code').textContent.trim();
+        navigator.clipboard.writeText(code).then(() => {
+          copyBtn.innerHTML = '<i class="bi bi-check2"></i>';
+          setTimeout(() => { copyBtn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200);
+        }).catch(() => {});
+      });
+    }
+
+    // ---------------- Meeting timer ----------------
+    const timerEl = document.getElementById('meeting-timer');
+    if (timerEl) {
+      let seconds = 0;
+      setInterval(() => {
+        seconds++;
+        const pad = n => String(n).padStart(2, '0');
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        timerEl.textContent = h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+      }, 1000);
+    }
+
+    // ---------------- End meeting ----------------
+    // If the host is still recording when they hit "End", stop the recorder
+    // and start the upload BEFORE navigating away — otherwise the recording
+    // is silently lost. The upload redirect takes us to the meeting detail
+    // page; we also fire the end_meeting request in the background so the
+    // meeting is marked ended.
+    const endForm = document.getElementById('end-meeting-form');
+    if (endForm) {
+      endForm.addEventListener('submit', function (e) {
+        const isRecording = window.SMARTMEET_IS_RECORDING && window.SMARTMEET_IS_RECORDING();
+        if (!isRecording) return;
+        e.preventDefault();
+        const btn = endForm.querySelector('button');
+        if (btn) btn.disabled = true;
+        if (statusLine) statusLine.textContent = 'Stopping recording and ending meeting...';
+        if (window.SMARTMEET_STOP_RECORDING) {
+          window.SMARTMEET_STOP_RECORDING();
+        }
+        const fd = new FormData(endForm);
+        fetch(endForm.action, { method: 'POST', body: fd, credentials: 'same-origin' }).catch(() => {});
+      });
+    }
+
+    // ---------------- Active-speaker glow on the local tile ----------------
+    function setupSpeakingDetector(stream) {
+      const audioTrack = stream.getAudioTracks()[0];
+      if (!audioTrack || !tileWrap) return;
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioCtx();
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+
+        (function loop() {
+          analyser.getByteFrequencyData(data);
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          tileWrap.classList.toggle('speaking', avg > 14 && !isMuted);
+          requestAnimationFrame(loop);
+        })();
+      } catch (e) {
+        console.warn('Speaking detector unavailable:', e);
+      }
+    }
+
+    (function waitForLocalStream(attemptsLeft) {
+      const stream = window.SMARTMEET_LOCAL_STREAM;
+      if (stream) {
+        setupSpeakingDetector(stream);
+      } else if (attemptsLeft > 0) {
+        setTimeout(() => waitForLocalStream(attemptsLeft - 1), 300);
+      }
+    })(40);
+  });
+</script>
+
+<!-- Your existing scripts -->
+<script src="{% static 'js/webrtc.js' %}?v=10-video-fix"></script>
+<script src="{% static 'js/recorder.js' %}"></script>
+{% endblock %}

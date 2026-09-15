@@ -1,0 +1,619 @@
+{% extends "base.html" %}
+{% block title %}Transcribe a voice memo — SmartMeet AI{% endblock %}
+{% block content %}
+
+{% if not ffmpeg_ok %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4" role="alert">
+  <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+  <div><strong>FFmpeg not detected.</strong> Install FFmpeg and add it to PATH before processing recordings.</div>
+</div>
+{% endif %}
+
+<div class="d-flex align-items-center gap-2 mb-4">
+  <a href="{% url 'meetings:dashboard' %}" class="btn btn-sm btn-outline-secondary rounded-pill">
+    <i class="bi bi-arrow-left me-1"></i> Back to dashboard
+  </a>
+  {% if meeting %}
+    <a href="{% url 'meetings:transcribe_upload' %}" class="btn btn-sm btn-outline-primary rounded-pill">
+      <i class="bi bi-plus-circle me-1"></i> Upload another voice memo
+    </a>
+  {% endif %}
+</div>
+
+<style>
+  .rec-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #f85149;
+    margin-right: 6px;
+    animation: recBlink 1s infinite;
+  }
+  @keyframes recBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .2; }
+  }
+  .rec-circle-btn {
+    width: 64px;
+    height: 64px;
+  }
+  .rec-circle-btn-sm {
+    width: 52px;
+    height: 52px;
+  }
+</style>
+
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+
+    {% if not meeting %}
+
+      <!-- ============ RECORD / UPLOAD ============ -->
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="badge rounded-pill px-3 py-2" style="background: rgba(187,128,9,0.15); color: #e3b341; border: 1px solid rgba(187,128,9,0.3);">
+          <i class="bi bi-mic-fill me-1"></i> Voice Memo
+        </span>
+      </div>
+      <h1 class="h2 fw-bold mb-2" style="color: var(--text-primary);">Transcribe a voice memo</h1>
+      <p class="mb-4" style="color: var(--text-muted);">
+        Record a voice memo right in your browser, or upload an audio file. SmartMeet AI will
+        transcribe it, and you'll be able to translate the transcript right here on this page.
+      </p>
+
+      <!-- ============ RECORD (PRIMARY) ============ -->
+      <div class="card action-card border-0 mb-4" id="voiceRecorderCard">
+        <div class="card-body text-center py-4">
+          <h6 class="fw-medium mb-1">
+            <i class="bi bi-mic-fill me-1" style="color: #e3b341;"></i> Record a voice memo
+          </h6>
+          <p class="small mb-4" style="color: var(--text-muted);">
+            No file needed — record directly using your microphone.
+          </p>
+
+          <div class="d-flex flex-column align-items-center gap-3">
+            <div id="recTimer" class="fw-bold" style="font-size: 2.25rem; color: var(--text-primary); font-variant-numeric: tabular-nums;">
+              00:00
+            </div>
+
+            <div id="recStatusBadge" class="small d-none" style="color: #f85149;">
+              <span class="rec-dot"></span>Recording
+            </div>
+
+            <div class="d-flex gap-3">
+              <button type="button" id="recStartBtn" class="btn btn-danger rounded-circle d-flex align-items-center justify-content-center rec-circle-btn" title="Start recording">
+                <i class="bi bi-mic-fill fs-4"></i>
+              </button>
+              <button type="button" id="recPauseBtn" class="btn btn-outline-secondary rounded-circle d-none align-items-center justify-content-center rec-circle-btn-sm" title="Pause">
+                <i class="bi bi-pause-fill fs-4"></i>
+              </button>
+              <button type="button" id="recResumeBtn" class="btn btn-outline-secondary rounded-circle d-none align-items-center justify-content-center rec-circle-btn-sm" title="Resume">
+                <i class="bi bi-play-fill fs-4"></i>
+              </button>
+              <button type="button" id="recStopBtn" class="btn btn-outline-danger rounded-circle d-none align-items-center justify-content-center rec-circle-btn-sm" title="Stop">
+                <i class="bi bi-stop-fill fs-4"></i>
+              </button>
+            </div>
+
+            <div id="recError" class="small text-danger d-none"></div>
+
+            <div id="recLevelWarning" class="small d-none d-flex align-items-center gap-2 mt-2 px-3 py-2" style="max-width: 420px; background: rgba(40,30,10,0.9); border: 1px solid rgba(255,200,50,0.35); border-radius: 10px; color: #ffd666;">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              <span></span>
+            </div>
+
+            <div id="recPreviewWrap" class="w-100 d-none mt-2" style="max-width: 420px;">
+              <div class="small mb-2" style="color: var(--accent-green, #3fb950);">
+                <i class="bi bi-check-circle-fill me-1"></i> Recording ready — fill in the details below and submit.
+              </div>
+              <audio id="recPreviewAudio" controls class="w-100 mb-2"></audio>
+              <button type="button" id="recRedoBtn" class="btn btn-sm btn-outline-secondary rounded-pill">
+                <i class="bi bi-arrow-counterclockwise me-1"></i> Re-record
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex align-items-center gap-3 my-4">
+        <hr class="flex-grow-1" style="border-color: var(--border-color, rgba(255,255,255,0.1));">
+        <span class="small" style="color: var(--text-muted);">or</span>
+        <hr class="flex-grow-1" style="border-color: var(--border-color, rgba(255,255,255,0.1));">
+      </div>
+
+      <!-- ============ DETAILS / UPLOAD FORM ============ -->
+      <div class="card action-card border-0" id="memoDetailsCard">
+        <div class="card-body">
+          <form method="post" action="{% url 'meetings:transcribe_upload' %}" enctype="multipart/form-data" id="voiceMemoForm">
+            {% csrf_token %}
+
+            <div class="mb-3">
+              <label for="memoTitle" class="form-label fw-medium">Title</label>
+              <input type="text" id="memoTitle" name="title" class="form-control"
+                     placeholder="e.g. Client call notes" maxlength="150">
+            </div>
+
+            <div class="mb-3">
+              <label for="memoAudio" class="form-label fw-medium">Audio file</label>
+              <input type="file" id="memoAudio" name="audio" class="form-control"
+                     accept="audio/*" required>
+              <div class="form-text" style="color: var(--text-muted);">
+                Recorded above, or choose a file. Supported formats: mp3, wav, m4a, ogg, flac, webm.
+              </div>
+            </div>
+
+            <div class="mb-4">
+              <label for="targetLang" class="form-label fw-medium">Translate transcript to (optional)</label>
+              <select id="targetLang" name="target_lang" class="form-select">
+                <option value="en" selected>No translation (English transcript only)</option>
+                {% for code, label in languages %}
+                  {% if code != "en" %}
+                    <option value="{{ code }}">{{ label }}</option>
+                  {% endif %}
+                {% endfor %}
+              </select>
+              <div class="form-text" style="color: var(--text-muted);">
+                You can also generate additional translations later from the results page.
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary px-4" id="submitBtn" {% if not ffmpeg_ok %}disabled{% endif %}>
+              <i class="bi bi-upload me-1"></i> Upload &amp; Transcribe
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="card list-card border-0 mt-4">
+        <div class="card-header d-flex align-items-center gap-2">
+          <i class="bi bi-info-circle" style="color: var(--accent-blue);"></i>
+          How it works
+        </div>
+        <ul class="list-group list-group-flush">
+          <li class="list-group-item d-flex align-items-start gap-3">
+            <span class="badge rounded-pill" style="background: var(--bg-tertiary); color: var(--text-muted);">1</span>
+            <span>Record a voice memo in your browser (or upload an audio file). It's processed with the same AI pipeline used for meeting recordings.</span>
+          </li>
+          <li class="list-group-item d-flex align-items-start gap-3">
+            <span class="badge rounded-pill" style="background: var(--bg-tertiary); color: var(--text-muted);">2</span>
+            <span>This page updates automatically once transcription finishes — no need to refresh.</span>
+          </li>
+          <li class="list-group-item d-flex align-items-start gap-3">
+            <span class="badge rounded-pill" style="background: var(--bg-tertiary); color: var(--text-muted);">3</span>
+            <span>Pick a language to translate the transcript into and export it as a PDF, right on this page.</span>
+          </li>
+        </ul>
+      </div>
+
+    {% else %}
+
+      <!-- ============ RESULTS ============ -->
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="badge rounded-pill px-3 py-2" style="background: rgba(187,128,9,0.15); color: #e3b341; border: 1px solid rgba(187,128,9,0.3);">
+          <i class="bi bi-mic-fill me-1"></i> Voice Memo
+        </span>
+      </div>
+      <h1 class="h2 fw-bold mb-3" style="color: var(--text-primary);">{{ meeting.room.title }}</h1>
+
+      {% if not transcript %}
+        <!-- Still processing: poll recording_status until the transcript is ready -->
+        <div class="card action-card border-0" id="processingCard">
+          <div class="card-body d-flex align-items-center gap-3">
+            <span class="spinner-border" style="color: var(--accent-blue);" role="status" aria-hidden="true"></span>
+            <div>
+              <div class="fw-medium" id="statusMessage">{{ recording.status_message|default:"Processing your voice memo..." }}</div>
+              <div class="small" style="color: var(--text-muted);">This page will update automatically. No need to refresh.</div>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          (function () {
+            var statusUrl = "{% url 'meetings:recording_status' recording.id %}";
+
+            function poll() {
+              fetch(statusUrl)
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                  var msgEl = document.getElementById('statusMessage');
+                  if (msgEl && data.status_message) {
+                    msgEl.textContent = data.status_message;
+                  }
+                  if (data.status && data.status.toLowerCase().indexOf('fail') !== -1) {
+                    var card = document.getElementById('processingCard');
+                    if (card) {
+                      card.innerHTML = '<div class="card-body d-flex align-items-center gap-3">' +
+                        '<i class="bi bi-x-circle-fill fs-4" style="color: var(--accent-red, #f85149);"></i>' +
+                        '<div><div class="fw-medium">Transcription failed</div>' +
+                        '<div class="small" style="color: var(--text-muted);">' + (data.status_message || 'Please try uploading again.') + '</div></div></div>';
+                    }
+                    return;
+                  }
+                  if (data.status === 'ready' || (data.has_transcript && data.has_summary)) {
+                    window.location.reload();
+                    return;
+                  }
+                  setTimeout(poll, 3000);
+                })
+                .catch(function () {
+                  setTimeout(poll, 5000);
+                });
+            }
+            setTimeout(poll, 3000);
+          })();
+        </script>
+
+      {% else %}
+
+        <!-- Meeting summary -->
+        <div class="card list-card border-0 mb-4">
+          <div class="card-header d-flex align-items-center gap-2">
+            <i class="bi bi-stars" style="color: var(--accent-blue);"></i>
+            Meeting Summary
+            <span class="badge rounded-pill ms-auto" style="background: var(--bg-tertiary); color: var(--text-muted);">
+              {{ transcript.language|default:"en"|upper }}
+            </span>
+          </div>
+          <div class="card-body">
+            {% with summary=transcript.summary_json %}
+            {% if summary and summary.summary %}
+              {% if summary.main_topic %}
+              <div class="mb-3">
+                <div class="small text-uppercase fw-medium mb-1" style="color: var(--text-muted);">Main topic</div>
+                <h5 class="fw-bold mb-0" style="color: var(--text-primary);">{{ summary.main_topic }}</h5>
+              </div>
+              {% endif %}
+              <div class="mb-3">
+                <div class="small text-uppercase fw-medium mb-1" style="color: var(--text-muted);">Overview</div>
+                <p class="mb-0" style="line-height: 1.7; color: var(--text-primary);">{{ summary.summary }}</p>
+              </div>
+              {% if summary.highlights %}
+              <div class="mb-3">
+                <div class="small text-uppercase fw-medium mb-2" style="color: var(--text-muted);">Highlights</div>
+                <ul class="ps-3 mb-0" style="color: var(--text-primary);">
+                  {% for h in summary.highlights %}
+                  <li class="mb-1">{{ h }}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+              {% endif %}
+              {% if summary.minutes %}
+                {% for section in summary.minutes %}
+                  {% if section.items %}
+                  <div class="mb-3">
+                    <div class="small text-uppercase fw-medium mb-2" style="color: var(--text-muted);">{{ section.heading }}</div>
+                    <ul class="ps-3 mb-0" style="color: var(--text-primary);">
+                      {% for item in section.items %}
+                      <li class="mb-1">{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                  {% endif %}
+                {% endfor %}
+              {% endif %}
+
+              <hr style="border-color: var(--border-color, rgba(255,255,255,0.1));">
+              <div class="text-end">
+                <button class="btn btn-sm btn-outline-secondary rounded-pill px-3" type="button" data-bs-toggle="collapse" data-bs-target="#fullTranscript" aria-expanded="false" aria-controls="fullTranscript">
+                  <i class="bi bi-chevron-down me-1"></i> View Full Transcript
+                </button>
+              </div>
+              <div class="collapse mt-3" id="fullTranscript">
+                <div class="border rounded p-3 transcript-text" style="white-space: pre-wrap; color: var(--text-primary);">{{ transcript.text }}</div>
+              </div>
+            {% else %}
+              <p style="white-space: pre-wrap; color: var(--text-primary);">{{ transcript.text }}</p>
+              <div class="small rounded p-3" style="background: var(--bg-tertiary); color: var(--text-muted);">
+                <i class="bi bi-info-circle me-1"></i> Summary is being prepared. The full transcript is shown above.
+              </div>
+            {% endif %}
+            {% endwith %}
+          </div>
+        </div>
+
+        <!-- Existing translations -->
+        {% if translations %}
+        <div class="card list-card border-0 mb-4">
+          <div class="card-header d-flex align-items-center gap-2">
+            <i class="bi bi-translate" style="color: var(--accent-green);"></i>
+            Translations
+            <span class="badge rounded-pill ms-auto" style="background: var(--bg-tertiary); color: var(--text-muted);">{{ translations|length }}</span>
+          </div>
+          <ul class="list-group list-group-flush">
+            {% for t in translations %}
+              <li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-start gap-3 mb-2">
+                  <div class="fw-medium">{{ t.get_language_code_display|default:t.language_code|upper }}</div>
+                  {% if t.pdf_file %}
+                    <a href="{% url 'meetings:download_pdf' t.id %}" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+                      <i class="bi bi-filetype-pdf me-1"></i> Download PDF
+                    </a>
+                  {% endif %}
+                </div>
+                <p class="small mb-0" style="white-space: pre-wrap; color: var(--text-muted);">{{ t.translated_text }}</p>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+        {% endif %}
+
+        <!-- Translate to another language -->
+        <div class="card action-card border-0 mb-4">
+          <div class="card-body">
+            <h6 class="fw-medium mb-3">
+              <i class="bi bi-translate me-1" style="color: var(--accent-green);"></i>
+              Translate this transcript
+            </h6>
+            <form method="post" action="{% url 'meetings:generate_translation' meeting.id %}" class="d-flex gap-2 flex-wrap">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{% url 'meetings:transcribe_upload' %}?meeting_id={{ meeting.id }}">
+              <select name="language" class="form-select" style="max-width: 260px;">
+                {% for code, label in languages %}
+                  {% if code != transcript.language %}
+                    <option value="{{ code }}">{{ label }}</option>
+                  {% endif %}
+                {% endfor %}
+              </select>
+              <button type="submit" formaction="{% url 'meetings:translate_transcript' meeting.id %}" class="btn btn-outline-primary px-4">
+                <i class="bi bi-translate me-1"></i> Translate only
+              </button>
+              <button type="submit" class="btn btn-primary px-4">
+                <i class="bi bi-magic me-1"></i> Translate &amp; Export PDF
+              </button>
+            </form>
+          </div>
+        </div>
+
+      {% endif %}
+
+    {% endif %}
+
+  </div>
+</div>
+
+<script>
+  var voiceMemoForm = document.getElementById('voiceMemoForm');
+  if (voiceMemoForm) {
+    voiceMemoForm.addEventListener('submit', function () {
+      var fileInput = document.getElementById('memoAudio');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        return;
+      }
+      var btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Uploading...';
+    });
+  }
+</script>
+
+<script>
+  // ============ In-browser voice memo recorder ============
+  (function () {
+    var recCard = document.getElementById('voiceRecorderCard');
+    if (!recCard) return;
+
+    if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+      recCard.querySelector('.card-body').innerHTML =
+        '<div class="small text-start" style="color: var(--text-muted);">' +
+        '<i class="bi bi-exclamation-circle me-1"></i> In-browser recording isn\'t supported in this browser. ' +
+        'Please use the file upload option below instead.</div>';
+      return;
+    }
+
+    var startBtn = document.getElementById('recStartBtn');
+    var pauseBtn = document.getElementById('recPauseBtn');
+    var resumeBtn = document.getElementById('recResumeBtn');
+    var stopBtn = document.getElementById('recStopBtn');
+    var redoBtn = document.getElementById('recRedoBtn');
+    var timerEl = document.getElementById('recTimer');
+    var statusBadge = document.getElementById('recStatusBadge');
+    var errorEl = document.getElementById('recError');
+    var previewWrap = document.getElementById('recPreviewWrap');
+    var previewAudio = document.getElementById('recPreviewAudio');
+    var fileInput = document.getElementById('memoAudio');
+    var detailsCard = document.getElementById('memoDetailsCard');
+    var warningEl = document.getElementById('recLevelWarning');
+
+    var mediaRecorder = null;
+    var chunks = [];
+    var activeStream = null;
+    var seconds = 0;
+    var timerInterval = null;
+
+    // ---- Audio level monitoring ----
+    var audioCtx = null;
+    var analyser = null;
+    var levelInterval = null;
+    var silentSecs = 0;
+    var hasWarned = false;
+    var SILENT_THRESHOLD = 0.012;
+    var WARN_AFTER_SECS = 5;
+
+    function fmt(s) {
+      var m = Math.floor(s / 60);
+      var r = s % 60;
+      return (m < 10 ? '0' + m : m) + ':' + (r < 10 ? '0' + r : r);
+    }
+
+    function startTimer() {
+      timerInterval = setInterval(function () {
+        seconds++;
+        timerEl.textContent = fmt(seconds);
+      }, 1000);
+    }
+
+    function stopTimer() {
+      clearInterval(timerInterval);
+    }
+
+    function showError(msg) {
+      errorEl.textContent = msg;
+      errorEl.classList.remove('d-none');
+    }
+
+    function clearError() {
+      errorEl.classList.add('d-none');
+      errorEl.textContent = '';
+    }
+
+    function showWarning(msg) {
+      if (!warningEl) return;
+      var span = warningEl.querySelector('span');
+      if (span) span.textContent = msg;
+      warningEl.classList.remove('d-none');
+      warningEl.classList.add('d-flex');
+    }
+
+    function hideWarning() {
+      if (warningEl) { warningEl.classList.add('d-none'); warningEl.classList.remove('d-flex'); }
+    }
+
+    function startLevelMonitor(stream) {
+      try {
+        var AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtx();
+        var src = audioCtx.createMediaStreamSource(stream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.6;
+        src.connect(analyser);
+        silentSecs = 0;
+        hasWarned = false;
+        levelInterval = setInterval(function () {
+          if (!analyser) return;
+          var buf = new Float32Array(analyser.fftSize);
+          analyser.getFloatTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          var rms = Math.sqrt(sum / buf.length);
+          if (rms < SILENT_THRESHOLD) { silentSecs++; } else { silentSecs = 0; }
+          if (silentSecs >= WARN_AFTER_SECS && !hasWarned) {
+            hasWarned = true;
+            showWarning('Voice not recognized — the recording appears silent. Check your microphone and speak clearly.');
+          }
+        }, 1000);
+      } catch (e) { /* AudioContext unavailable — monitoring disabled */ }
+    }
+
+    function stopLevelMonitor() {
+      if (levelInterval) { clearInterval(levelInterval); levelInterval = null; }
+      silentSecs = 0;
+      hasWarned = false;
+      if (audioCtx) { audioCtx.close().catch(function () {}); audioCtx = null; }
+      analyser = null;
+    }
+
+    function showControls(state) {
+      startBtn.classList.toggle('d-none', state !== 'idle');
+      pauseBtn.classList.toggle('d-none', state !== 'recording');
+      pauseBtn.classList.toggle('d-flex', state === 'recording');
+      resumeBtn.classList.toggle('d-none', state !== 'paused');
+      resumeBtn.classList.toggle('d-flex', state === 'paused');
+      stopBtn.classList.toggle('d-none', state === 'idle');
+      stopBtn.classList.toggle('d-flex', state !== 'idle');
+      statusBadge.classList.toggle('d-none', state === 'idle');
+    }
+
+    startBtn.addEventListener('click', function () {
+      clearError();
+      hideWarning();
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+        activeStream = stream;
+        chunks = [];
+        seconds = 0;
+        timerEl.textContent = '00:00';
+        previewWrap.classList.add('d-none');
+
+        var mimeType = '';
+        var candidates = ['audio/webm', 'audio/ogg', 'audio/mp4'];
+        for (var i = 0; i < candidates.length; i++) {
+          if (MediaRecorder.isTypeSupported(candidates[i])) {
+            mimeType = candidates[i];
+            break;
+          }
+        }
+        mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType }) : new MediaRecorder(stream);
+
+        mediaRecorder.addEventListener('dataavailable', function (e) {
+          if (e.data && e.data.size > 0) chunks.push(e.data);
+        });
+
+        mediaRecorder.addEventListener('stop', function () {
+          stopLevelMonitor();
+          var type = mediaRecorder.mimeType || 'audio/webm';
+          var recordedBlob = new Blob(chunks, { type: type });
+          var url = URL.createObjectURL(recordedBlob);
+          previewAudio.src = url;
+          previewWrap.classList.remove('d-none');
+
+          var ext = type.indexOf('ogg') !== -1 ? 'ogg' : (type.indexOf('mp4') !== -1 ? 'm4a' : 'webm');
+          var fileName = 'voice-memo-' + Date.now() + '.' + ext;
+          var recordedFile = new File([recordedBlob], fileName, { type: type });
+
+          try {
+            var dt = new DataTransfer();
+            dt.items.add(recordedFile);
+            fileInput.files = dt.files;
+          } catch (err) {
+            showError('Could not attach the recording automatically. Please use the upload option below.');
+          }
+
+          if (activeStream) {
+            activeStream.getTracks().forEach(function (t) { t.stop(); });
+            activeStream = null;
+          }
+
+          if (detailsCard) {
+            detailsCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        });
+
+        mediaRecorder.start();
+        startTimer();
+        startLevelMonitor(stream);
+        showControls('recording');
+      }).catch(function () {
+        showError('Microphone access was denied or is unavailable. Please allow microphone access, or use the file upload option below.');
+      });
+    });
+
+    pauseBtn.addEventListener('click', function () {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.pause();
+        stopTimer();
+        stopLevelMonitor();
+        showControls('paused');
+      }
+    });
+
+    resumeBtn.addEventListener('click', function () {
+      if (mediaRecorder && mediaRecorder.state === 'paused') {
+        mediaRecorder.resume();
+        startTimer();
+        startLevelMonitor(activeStream);
+        showControls('recording');
+      }
+    });
+
+    stopBtn.addEventListener('click', function () {
+      stopLevelMonitor();
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+        stopTimer();
+      }
+      showControls('idle');
+    });
+
+    redoBtn.addEventListener('click', function () {
+      previewWrap.classList.add('d-none');
+      hideWarning();
+      fileInput.value = '';
+      seconds = 0;
+      timerEl.textContent = '00:00';
+      clearError();
+      stopLevelMonitor();
+    });
+  })();
+</script>
+
+{% endblock %}

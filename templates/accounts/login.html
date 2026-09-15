@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Login — SmartMeet AI{% endblock %}
+{% block content %}
+
+<!-- Hero Section -->
+<div class="hero-dashboard mb-5 position-relative overflow-hidden">
+  <div class="hero-bg-pattern"></div>
+  <div class="row align-items-center g-4 position-relative">
+    <div class="col-lg-7">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="badge rounded-pill px-3 py-2" style="background: rgba(88,166,255,0.15); color: var(--accent-blue); border: 1px solid rgba(88,166,255,0.3);">
+          <i class="bi bi-stars me-1"></i> AI-Powered
+        </span>
+      </div>
+      <h1 class="display-5 fw-bold mb-3" style="color: var(--text-primary);">
+        SmartMeet <span style="color: var(--accent-blue);">AI</span>
+      </h1>
+      <p class="lead mb-0" style="color: var(--text-muted); max-width: 540px;">
+        Video meetings with intelligent recording, real-time transcription, live subtitles, multilingual translation, and seamless PDF export — all in one place.
+      </p>
+    </div>
+    <div class="col-lg-5">
+      <div class="hero-stats-grid">
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(88,166,255,0.12);">
+            <i class="bi bi-mic" style="color: var(--accent-blue);"></i>
+          </div>
+          <div class="hero-stat-label">Transcription</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(63,185,80,0.12);">
+            <i class="bi bi-translate" style="color: var(--accent-green);"></i>
+          </div>
+          <div class="hero-stat-label">Translation</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(187,128,9,0.12);">
+            <i class="bi bi-card-text" style="color: #e3b341;"></i>
+          </div>
+          <div class="hero-stat-label">Subtitles</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(139,148,158,0.12);">
+            <i class="bi bi-filetype-pdf" style="color: var(--text-muted);"></i>
+          </div>
+          <div class="hero-stat-label">PDF Export</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Description + Login -->
+<div class="row g-5 align-items-start">
+
+  <!-- Left: product description -->
+  <div class="col-lg-7">
+    <h2 class="h3 fw-bold mb-3" style="color: var(--text-primary);">Meetings that transcribe, translate, and document themselves</h2>
+    <p class="mb-4" style="color: var(--text-muted);">
+      SmartMeet AI records every meeting or voice memo you host, turns speech into accurate
+      transcripts, and translates them into the language your team actually reads. No more
+      manual note-taking, no more chasing down what was said — it's all captured, searchable,
+      and exportable in a click.
+    </p>
+
+    <div class="row g-4 mb-4">
+      <div class="col-sm-6">
+        <div class="card list-card border-0 h-100">
+          <div class="card-body">
+            <div class="action-icon mb-3" style="background: rgba(88,166,255,0.12); width: 44px; height: 44px;">
+              <i class="bi bi-camera-video-fill" style="color: var(--accent-blue);"></i>
+            </div>
+            <h6 class="fw-medium mb-2">Live rooms</h6>
+            <p class="small mb-0" style="color: var(--text-muted);">Create or join a video meeting in seconds with a shareable room code.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="card list-card border-0 h-100">
+          <div class="card-body">
+            <div class="action-icon mb-3" style="background: rgba(63,185,80,0.12); width: 44px; height: 44px;">
+              <i class="bi bi-mic-fill" style="color: var(--accent-green);"></i>
+            </div>
+            <h6 class="fw-medium mb-2">Voice memos</h6>
+            <p class="small mb-0" style="color: var(--text-muted);">Upload a standalone recording and get a full transcript, no meeting required.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="card list-card border-0 h-100">
+          <div class="card-body">
+            <div class="action-icon mb-3" style="background: rgba(187,128,9,0.12); width: 44px; height: 44px;">
+              <i class="bi bi-translate" style="color: #e3b341;"></i>
+            </div>
+            <h6 class="fw-medium mb-2">Instant translation</h6>
+            <p class="small mb-0" style="color: var(--text-muted);">Translate any transcript into another language with one click.</p>
+          </div>
+        </div>
+      </div>
+      <div class="col-sm-6">
+        <div class="card list-card border-0 h-100">
+          <div class="card-body">
+            <div class="action-icon mb-3" style="background: rgba(139,148,158,0.12); width: 44px; height: 44px;">
+              <i class="bi bi-filetype-pdf" style="color: var(--text-muted);"></i>
+            </div>
+            <h6 class="fw-medium mb-2">PDF export</h6>
+            <p class="small mb-0" style="color: var(--text-muted);">Download a polished, shareable transcript or translation as a PDF.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex align-items-center gap-2" style="color: var(--text-muted);">
+      <i class="bi bi-shield-check" style="color: var(--accent-green);"></i>
+      <small>Sign in to access your rooms, recordings, and transcripts.</small>
+    </div>
+  </div>
+
+  <!-- Right: login form -->
+  <div class="col-lg-5">
+    <div class="card action-card border-0 shadow-sm" style="position: sticky; top: 1.5rem;">
+      <div class="card-body p-4">
+        <div class="d-flex align-items-center gap-2 mb-3">
+          <div class="action-icon" style="background: rgba(88,166,255,0.12);">
+            <i class="bi bi-box-arrow-in-right fs-5" style="color: var(--accent-blue);"></i>
+          </div>
+          <h2 class="h4 mb-0" style="color: var(--text-primary);">Sign in</h2>
+        </div>
+
+        <form method="post">
+          {% csrf_token %}
+          <div class="mb-3">
+            <label class="form-label fw-medium">Username</label>
+            {{ form.username }}
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-medium">Password</label>
+            {{ form.password }}
+          </div>
+          {% if form.errors %}
+            <div class="alert alert-danger d-flex align-items-center gap-2">
+              <i class="bi bi-exclamation-triangle-fill"></i>
+              <div>Invalid username or password.</div>
+            </div>
+          {% endif %}
+          <button class="btn btn-primary w-100" type="submit">
+            <i class="bi bi-box-arrow-in-right me-1"></i> Login
+          </button>
+        </form>
+        <p class="mt-3 mb-0 text-center small" style="color: var(--text-muted);">
+          No account? <a href="{% url 'accounts:register' %}">Register</a>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

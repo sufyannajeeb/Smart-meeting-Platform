@@ -1,0 +1,135 @@
+.hero-banner {
+  background: linear-gradient(135deg, #0d6efd 0%, #6610f2 100%);
+}
+
+/* ───── Dashboard Hero ───── */
+.hero-dashboard {
+  background: linear-gradient(135deg, #0d6efd08 0%, #6610f208 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 2.5rem 2rem;
+}
+
+.hero-bg-pattern {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle at 25% 50%, rgba(88,166,255,0.06) 0%, transparent 50%),
+                    radial-gradient(circle at 75% 50%, rgba(63,185,80,0.06) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.hero-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.hero-stat-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 16px;
+  text-align: center;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.hero-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent-blue);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+}
+
+.hero-stat-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 8px;
+}
+
+.hero-stat-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ───── Action Cards ───── */
+.action-card {
+  background: var(--bg-secondary);
+  border-radius: 16px !important;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+}
+
+.action-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+  border-color: var(--border-color);
+}
+
+.action-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ───── List Cards ───── */
+.list-card {
+  background: var(--bg-secondary);
+  border-radius: 16px !important;
+  overflow: hidden;
+}
+
+.list-card .card-header {
+  padding: 1rem 1.25rem;
+  font-weight: 600;
+}
+
+.list-card .list-group-item {
+  padding: 0.9rem 1.25rem;
+  transition: background 0.15s;
+}
+
+.list-card .list-group-item:hover {
+  background: var(--bg-tertiary);
+}
+
+/* ───── Form Overrides ───── */
+.action-card .input-group .form-control {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.action-card .input-group .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  min-height: 360px;
+  background: #1a1a2e;
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.video-tile {
+  width: 100%;
+  aspect-ratio: 16/10;
+  background: #0f0f1a;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.transcript-text {
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow-y: auto;
+}

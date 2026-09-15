@@ -1,0 +1,227 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ctext x='16' y='23' font-size='19' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3ESM%3C/text%3E%3C/svg%3E">
+  <title>{% block title %}SmartMeet AI{% endblock %}</title>
+  
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+  <!-- Custom CSS -->
+  <link href="{% static 'css/style.css' %}" rel="stylesheet">
+
+  <style>
+    /* Global Dark Theme Variables */
+    :root {
+      --bg-primary: #0f1115;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --border-color: #30363d;
+      --text-primary: #e9ecef;
+      --text-muted: #8b949e;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-red: #f85149;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Navbar Styling */
+    .navbar {
+      background-color: var(--bg-secondary) !important;
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.75rem 1rem;
+    }
+
+    .navbar-brand {
+      font-weight: 700;
+      color: var(--text-primary) !important;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .navbar-brand i {
+      color: var(--accent-blue);
+      font-size: 1.5rem;
+    }
+
+    .navbar .text-white {
+      color: var(--text-primary) !important;
+    }
+
+    .btn-outline-light {
+      border-color: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .btn-outline-light:hover {
+      background-color: var(--bg-tertiary);
+      border-color: var(--text-muted);
+      color: #fff;
+    }
+
+    /* Main Content */
+    main {
+      flex: 1;
+      padding: 2rem 1rem;
+    }
+
+    /* Card Overrides for Dark Theme */
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .card-header {
+      background-color: transparent;
+      border-bottom: 1px solid var(--border-color);
+      font-weight: 600;
+    }
+
+    /* List Group Overrides */
+    .list-group-item {
+      background-color: var(--bg-secondary);
+      border-color: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    /* Form Controls */
+    .form-control, .form-select {
+      background-color: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .form-control:focus, .form-select:focus {
+      background-color: var(--bg-primary);
+      border-color: var(--accent-blue);
+      color: var(--text-primary);
+      box-shadow: 0 0 0 0.2rem rgba(88, 166, 255, 0.25);
+    }
+
+    /* Links */
+    a {
+      color: var(--accent-blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      color: #79b8ff;
+      text-decoration: underline;
+    }
+
+    /* Footer */
+    footer {
+      background-color: var(--bg-secondary);
+      border-top: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 1.5rem 0;
+      text-align: center;
+      font-size: 0.875rem;
+    }
+
+    /* Utility Classes */
+    .text-muted {
+      color: var(--text-muted) !important;
+    }
+
+    /* Custom Alert Overrides */
+    .alert {
+      border: 1px solid transparent;
+      border-radius: 8px;
+    }
+    .alert-info {
+      background-color: rgba(56, 139, 253, 0.1);
+      color: #79c0ff;
+      border-color: rgba(56, 139, 253, 0.3);
+    }
+    .alert-success {
+      background-color: rgba(63, 185, 80, 0.1);
+      color: #56d364;
+      border-color: rgba(63, 185, 80, 0.3);
+    }
+    .alert-warning {
+      background-color: rgba(187, 128, 9, 0.1);
+      color: #e3b341;
+      border-color: rgba(187, 128, 9, 0.3);
+    }
+    .alert-danger {
+      background-color: rgba(248, 81, 73, 0.1);
+      color: #ff7b72;
+      border-color: rgba(248, 81, 73, 0.3);
+    }
+    .alert .btn-close {
+      filter: invert(1) grayscale(100%) brightness(200%);
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar navbar-expand-lg sticky-top">
+    <div class="container">
+      <a class="navbar-brand" href="{% url 'meetings:dashboard' %}">
+        <i class="bi bi-camera-video-fill"></i>
+        SmartMeet AI
+      </a>
+      {% if user.is_authenticated %}
+      <div class="d-flex align-items-center gap-3">
+        <div class="d-flex align-items-center gap-2">
+          <div class="rounded-circle bg-secondary d-flex align-items-center justify-content-center" style="width: 32px; height: 32px; font-weight: bold;">
+            {{ user.username|slice:":1"|upper }}
+          </div>
+          <span class="small d-none d-md-inline">{{ user.username }}</span>
+        </div>
+        <form method="post" action="{% url 'accounts:logout' %}" class="d-inline m-0">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-outline-light btn-sm px-3">
+        <i class="bi bi-box-arrow-right me-1"></i> Logout
+    </button>
+</form>
+      </div>
+      {% else %}
+      <a class="btn btn-outline-light btn-sm px-3" href="{% url 'accounts:login' %}">
+        <i class="bi bi-box-arrow-in-right me-1"></i> Login
+      </a>
+      {% endif %}
+    </div>
+  </nav>
+
+  <main class="container py-4">
+    {% if messages %}
+      {% for message in messages %}
+        <div class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show d-flex align-items-center" role="alert">
+          <i class="bi bi-info-circle-fill me-2"></i>
+          <div class="flex-grow-1">
+            {{ message }}
+          </div>
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endfor %}
+    {% endif %}
+    
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>
+    <div class="container">
+      SmartMeet AI — College Project &middot; Django + WebRTC + Whisper
+    </div>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

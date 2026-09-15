@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — SmartMeet AI{% endblock %}
+{% block content %}
+
+{% if not ffmpeg_ok %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-4" role="alert">
+  <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+  <div><strong>FFmpeg not detected.</strong> Install FFmpeg and add it to PATH before processing recordings.</div>
+</div>
+{% endif %}
+
+<!-- Hero Section -->
+<div class="hero-dashboard mb-5 position-relative overflow-hidden">
+  <div class="hero-bg-pattern"></div>
+  <div class="row align-items-center g-4 position-relative">
+    <div class="col-lg-7">
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="badge rounded-pill px-3 py-2" style="background: rgba(88,166,255,0.15); color: var(--accent-blue); border: 1px solid rgba(88,166,255,0.3);">
+          <i class="bi bi-stars me-1"></i> AI-Powered
+        </span>
+      </div>
+      <h1 class="display-5 fw-bold mb-3" style="color: var(--text-primary);">
+        SmartMeet <span style="color: var(--accent-blue);">AI</span>
+      </h1>
+      <p class="lead mb-0" style="color: var(--text-muted); max-width: 540px;">
+        Video meetings with intelligent recording, real-time transcription, live subtitles, multilingual translation, and seamless PDF export.
+      </p>
+    </div>
+    <div class="col-lg-5">
+      <div class="hero-stats-grid">
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(88,166,255,0.12);">
+            <i class="bi bi-mic" style="color: var(--accent-blue);"></i>
+          </div>
+          <div class="hero-stat-label">Transcription</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(63,185,80,0.12);">
+            <i class="bi bi-translate" style="color: var(--accent-green);"></i>
+          </div>
+          <div class="hero-stat-label">Translation</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(187,128,9,0.12);">
+            <i class="bi bi-card-text" style="color: #e3b341;"></i>
+          </div>
+          <div class="hero-stat-label">Subtitles</div>
+        </div>
+        <div class="hero-stat-card">
+          <div class="hero-stat-icon" style="background: rgba(139,148,158,0.12);">
+            <i class="bi bi-filetype-pdf" style="color: var(--text-muted);"></i>
+          </div>
+          <div class="hero-stat-label">PDF Export</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Action Cards -->
+<div class="row g-4 mb-5">
+  <div class="col-md-4">
+    <div class="card action-card border-0 h-100">
+      <div class="card-body d-flex flex-column">
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <div class="action-icon" style="background: rgba(88,166,255,0.12);">
+            <i class="bi bi-plus-circle-fill fs-4" style="color: var(--accent-blue);"></i>
+          </div>
+          <div>
+            <h5 class="card-title mb-1">Create a room</h5>
+            <p class="card-text small mb-0" style="color: var(--text-muted);">Start a new meeting and invite participants.</p>
+          </div>
+        </div>
+        <form method="post" action="{% url 'meetings:create_room' %}" class="mt-auto">
+          {% csrf_token %}
+          <div class="input-group">
+            <input type="text" name="title" class="form-control" placeholder="e.g. Project Discussion" required>
+            <button class="btn btn-primary px-4" type="submit">
+              <i class="bi bi-camera-video me-1"></i> Create &amp; Join
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card action-card border-0 h-100">
+      <div class="card-body d-flex flex-column">
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <div class="action-icon" style="background: rgba(63,185,80,0.12);">
+            <i class="bi bi-box-arrow-in-right fs-4" style="color: var(--accent-green);"></i>
+          </div>
+          <div>
+            <h5 class="card-title mb-1">Join with code</h5>
+            <p class="card-text small mb-0" style="color: var(--text-muted);">Enter a room code to join an existing meeting.</p>
+          </div>
+        </div>
+        <form method="post" action="{% url 'meetings:join_room' %}" class="mt-auto">
+          {% csrf_token %}
+          <div class="input-group">
+            <input type="text" name="code" class="form-control text-uppercase" placeholder="AB12CD34" required>
+            <button class="btn btn-outline-primary px-4" type="submit">
+              <i class="bi bi-arrow-right-circle me-1"></i> Join Room
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card action-card border-0 h-100">
+      <div class="card-body d-flex flex-column">
+        <div class="d-flex align-items-center gap-3 mb-3">
+          <div class="action-icon" style="background: rgba(187,128,9,0.12);">
+            <i class="bi bi-mic-fill fs-4" style="color: #e3b341;"></i>
+          </div>
+          <div>
+            <h5 class="card-title mb-1">Transcribe a voice memo</h5>
+            <p class="card-text small mb-0" style="color: var(--text-muted);">Upload an audio recording to get an AI transcript.</p>
+          </div>
+        </div>
+        <a href="{% url 'meetings:transcribe_upload' %}" class="btn btn-warning px-4 mt-auto text-white">
+          <i class="bi bi-upload me-1"></i> Upload &amp; Transcribe
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Rooms & Meetings -->
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card list-card border-0">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-door-open" style="color: var(--accent-blue);"></i>
+        Your rooms
+        {% if rooms %}<span class="badge rounded-pill ms-auto" style="background: var(--bg-tertiary); color: var(--text-muted);">{{ rooms|length }}</span>{% endif %}
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for room in rooms %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-green); flex-shrink: 0;"></div>
+              <div>
+                <div class="fw-medium">{{ room.title }}</div>
+                <code class="small" style="color: var(--text-muted);">{{ room.code }}</code>
+              </div>
+            </div>
+            <a href="{% url 'meetings:room' room.code %}" class="btn btn-sm btn-primary rounded-pill px-3">
+              <i class="bi bi-camera-video me-1"></i> Open
+            </a>
+          </li>
+        {% empty %}
+          <li class="list-group-item text-center py-4" style="color: var(--text-muted);">
+            <i class="bi bi-door-open fs-2 d-block mb-2 opacity-50"></i>
+            No rooms yet. Create one above.
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card list-card border-0">
+      <div class="card-header d-flex align-items-center gap-2">
+        <i class="bi bi-clock-history" style="color: var(--accent-green);"></i>
+        Recent meetings
+        {% if recent_meetings %}<span class="badge rounded-pill ms-auto" style="background: var(--bg-tertiary); color: var(--text-muted);">{{ recent_meetings|length }}</span>{% endif %}
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for m in recent_meetings %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <div class="d-flex align-items-center gap-3">
+              <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-blue); flex-shrink: 0;"></div>
+              <div>
+                <div class="fw-medium">{{ m.room.title }}</div>
+                <small style="color: var(--text-muted);">{{ m.started_at|date:"d M Y H:i" }}</small>
+              </div>
+            </div>
+            <a href="{% url 'meetings:meeting_detail' m.id %}" class="btn btn-sm btn-outline-secondary rounded-pill px-3">
+              <i class="bi bi-arrow-right me-1"></i> Details
+            </a>
+          </li>
+        {% empty %}
+          <li class="list-group-item text-center py-4" style="color: var(--text-muted);">
+            <i class="bi bi-clock-history fs-2 d-block mb-2 opacity-50"></i>
+            No meetings yet.
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

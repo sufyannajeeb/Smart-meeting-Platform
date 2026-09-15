@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Admin Panel — SmartMeet AI{% endblock %}
+
+{% block content %}
+<style>
+  :root {
+    --ap-bg: #0b1326;
+    --ap-panel: #131b2e;
+    --ap-panel-alt: #171f33;
+    --ap-panel-high: #222a3d;
+    --ap-border: #434655;
+    --ap-text: #dae2fd;
+    --ap-text-dim: #c3c6d7;
+    --ap-accent: #b4c5ff;
+    --ap-accent-strong: #2563eb;
+    --ap-accent-soft: rgba(37, 99, 235, 0.18);
+    --ap-danger: #ffb4ab;
+    --ap-danger-strong: #93000a;
+    --ap-success: #4edea3;
+    --ap-warning: #ffb2b7;
+    --ap-purple: #c4b5fd;
+  }
+  body { background-color: var(--ap-bg); }
+  .ap-wrap {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 1.75rem 1.25rem 3rem;
+    color: var(--ap-text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .ap-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 1.5rem; flex-wrap: wrap; gap: .75rem; }
+  .ap-header h1 { font-size: 1.5rem; font-weight: 700; color: #f0f6fc; margin: 0; }
+  .ap-header p { color: var(--ap-text-dim); margin: .2rem 0 0; font-size: .88rem; }
+
+  .ap-tabs { display: flex; gap: 6px; background: var(--ap-panel-alt); border: 1px solid var(--ap-border); border-radius: 12px; padding: 4px; width: fit-content; margin-bottom: 1.5rem; }
+  .ap-tab-btn { border: none; background: transparent; color: var(--ap-text-dim); font-size: .85rem; font-weight: 600; padding: 8px 18px; border-radius: 9px; cursor: pointer; }
+  .ap-tab-btn.active { background: var(--ap-accent-soft); color: var(--ap-accent); }
+  .ap-panel { display: none; }
+  .ap-panel.active { display: block; }
+
+  .ap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 1.75rem; }
+  .ap-card { background: var(--ap-panel); border: 1px solid var(--ap-border); border-radius: 14px; padding: 1.1rem 1.25rem; }
+  .ap-card .ap-card-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ap-text-dim); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .ap-card .ap-card-value { font-size: 1.7rem; font-weight: 700; color: #f0f6fc; margin-top: .3rem; }
+  .ap-card .ap-card-sub { font-size: .76rem; color: var(--ap-success); margin-top: .2rem; }
+  .ap-card .ap-card-sub.warn { color: var(--ap-danger); }
+
+  .ap-section { background: var(--ap-panel); border: 1px solid var(--ap-border); border-radius: 14px; padding: 1.25rem; margin-bottom: 1.5rem; }
+  .ap-section h2 { font-size: .95rem; font-weight: 700; color: #f0f6fc; margin: 0 0 1rem; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .ap-section h2 .ap-section-icon { color: var(--ap-accent); font-size: .9rem; }
+
+  .ap-bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: .82rem; }
+  .ap-bar-label { width: 140px; flex-shrink: 0; color: var(--ap-text-dim); text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ap-bar-track { flex: 1; background: var(--ap-panel-high); border-radius: 6px; height: 10px; overflow: hidden; }
+  .ap-bar-fill { height: 100%; background: linear-gradient(90deg, var(--ap-accent-strong), var(--ap-accent)); border-radius: 6px; }
+  .ap-bar-count { width: 34px; text-align: right; color: var(--ap-text); font-weight: 600; flex-shrink: 0; }
+
+  .ap-list { list-style: none; margin: 0; padding: 0; }
+  .ap-list li { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--ap-border); font-size: .85rem; }
+  .ap-list li:last-child { border-bottom: none; }
+  .ap-list .ap-list-meta { color: var(--ap-text-dim); font-size: .76rem; }
+
+  .ap-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  .ap-three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+  @media (max-width: 780px) { .ap-two-col, .ap-three-col { grid-template-columns: 1fr; } }
+
+  .ap-search { display: flex; gap: 8px; margin-bottom: 1rem; }
+  .ap-search input { flex: 1; background: var(--ap-bg); border: 1px solid var(--ap-border); color: var(--ap-text); border-radius: 8px; padding: 8px 12px; font-size: .85rem; }
+  .ap-search button { border: 1px solid var(--ap-border); background: var(--ap-panel-high); color: var(--ap-text); border-radius: 8px; padding: 8px 16px; font-size: .85rem; cursor: pointer; }
+
+  .ap-export-btn { border: 1px solid var(--ap-border); background: var(--ap-panel-high); color: var(--ap-text); border-radius: 8px; padding: 8px 14px; font-size: .82rem; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+  .ap-export-btn:hover { background: var(--ap-accent-soft); color: var(--ap-accent); }
+
+  .ap-users-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 1rem; }
+
+  .ap-table { width: 100%; border-collapse: collapse; font-size: .84rem; }
+  .ap-table th { text-align: left; color: var(--ap-text-dim); font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; padding: 8px 10px; border-bottom: 1px solid var(--ap-border); }
+  .ap-table td { padding: 10px; border-bottom: 1px solid var(--ap-border); vertical-align: middle; }
+  .ap-table tr:last-child td { border-bottom: none; }
+
+  .ap-badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: .72rem; font-weight: 600; }
+  .ap-badge.on { background: rgba(78,222,163,.15); color: var(--ap-success); border: 1px solid rgba(78,222,163,.35); }
+  .ap-badge.off { background: rgba(255,180,171,.12); color: var(--ap-danger); border: 1px solid rgba(255,180,171,.3); }
+  .ap-badge.staff { background: var(--ap-accent-soft); color: var(--ap-accent); border: 1px solid rgba(37,99,235,.35); }
+
+  .ap-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ap-btn { border: 1px solid var(--ap-border); background: var(--ap-panel-high); color: var(--ap-text); border-radius: 7px; padding: 5px 10px; font-size: .74rem; cursor: pointer; }
+  .ap-btn:hover { background: var(--ap-accent-soft); color: var(--ap-accent); }
+  .ap-btn.danger { background: rgba(147,0,10,.18); color: var(--ap-danger); border-color: rgba(255,180,171,.35); }
+  .ap-btn.danger:hover { background: var(--ap-danger-strong); color: #ffdad6; }
+
+  .ap-pagination { display: flex; gap: 6px; justify-content: center; margin-top: 1.1rem; }
+  .ap-pagination a, .ap-pagination span { border: 1px solid var(--ap-border); border-radius: 7px; padding: 5px 11px; font-size: .8rem; color: var(--ap-text-dim); text-decoration: none; }
+  .ap-pagination a:hover { background: var(--ap-panel-high); color: var(--ap-text); }
+  .ap-pagination .current { background: var(--ap-accent-soft); color: var(--ap-accent); }
+</style>
+
+<div class="ap-wrap">
+  <div class="ap-header">
+    <div>
+      <h1><i class="bi bi-speedometer2"></i> Admin Panel</h1>
+      <p>Platform stats and user management for SmartMeet AI</p>
+    </div>
+  </div>
+
+  <div class="ap-tabs">
+    <button type="button" class="ap-tab-btn" data-tab="dashboard">Dashboard</button>
+    <button type="button" class="ap-tab-btn" data-tab="users">Manage Users</button>
+  </div>
+
+  {% if messages %}
+    {% for message in messages %}
+      <div class="alert alert-info" style="font-size:.85rem;">{{ message }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <!-- ===================== Dashboard tab ===================== -->
+  <div class="ap-panel" id="tab-dashboard">
+
+    <div class="ap-grid">
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-people-fill"></i> Total Users</div>
+        <div class="ap-card-value">{{ total_users }}</div>
+        <div class="ap-card-sub">+{{ new_users_week }} this week</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-person-check-fill"></i> Active Users</div>
+        <div class="ap-card-value">{{ active_users }}</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-shield-fill"></i> Staff Accounts</div>
+        <div class="ap-card-value">{{ staff_users }}</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-camera-video-fill"></i> Total Rooms</div>
+        <div class="ap-card-value">{{ total_rooms }}</div>
+        <div class="ap-card-sub">{{ active_rooms }} active · +{{ rooms_week }} this week</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-calendar-event-fill"></i> Total Meetings</div>
+        <div class="ap-card-value">{{ total_meetings }}</div>
+        <div class="ap-card-sub">{{ meetings_today }} today · {{ ongoing_meetings }} live</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-hdd-fill"></i> Recordings</div>
+        <div class="ap-card-value">{{ total_recordings }}</div>
+        <div class="ap-card-sub {% if failed_count %}warn{% endif %}">{{ failed_count }} failed</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-file-text-fill"></i> Transcripts</div>
+        <div class="ap-card-value">{{ total_transcripts }}</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-translate"></i> Translations / PDFs</div>
+        <div class="ap-card-value">{{ total_translations }}</div>
+      </div>
+    </div>
+
+    <!-- Secondary metrics: duration + reliability -->
+    <div class="ap-grid">
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-clock-history"></i> Total Recorded</div>
+        <div class="ap-card-value">{{ total_duration_hours }}h</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-stopwatch"></i> Avg Recording</div>
+        <div class="ap-card-value">{{ avg_recording_minutes }}m</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-hourglass-split"></i> Avg Meeting Length</div>
+        <div class="ap-card-value">{{ avg_meeting_minutes }}m</div>
+      </div>
+      <div class="ap-card">
+        <div class="ap-card-label"><i class="bi bi-check-circle-fill"></i> Processing Success</div>
+        <div class="ap-card-value">{{ success_rate }}%</div>
+        <div class="ap-card-sub {% if success_rate < 80 %}warn{% endif %}">{% if success_rate >= 80 %}Healthy{% else %}Needs attention{% endif %}</div>
+      </div>
+    </div>
+
+    <!-- Leaderboards -->
+    <div class="ap-two-col">
+      <div class="ap-section">
+        <h2>Top Hosts (by rooms created)</h2>
+        {% for h in top_hosts %}
+          <div class="ap-bar-row">
+            <div class="ap-bar-label">{{ h.host__username }}</div>
+            <div class="ap-bar-track">
+              <div class="ap-bar-fill" style="width: {% widthratio h.room_count max_top_host_count 100 %}%;"></div>
+            </div>
+            <div class="ap-bar-count">{{ h.room_count }}</div>
+          </div>
+        {% empty %}
+          <p class="ap-list-meta">No rooms yet.</p>
+        {% endfor %}
+      </div>
+      <div class="ap-section">
+        <h2>Most Active Hosts (by meetings run)</h2>
+        {% for h in most_active_hosts %}
+          <div class="ap-bar-row">
+            <div class="ap-bar-label">{{ h.host__username }}</div>
+            <div class="ap-bar-track">
+              <div class="ap-bar-fill" style="width: {% widthratio h.meeting_count max_active_host_count 100 %}%;"></div>
+            </div>
+            <div class="ap-bar-count">{{ h.meeting_count }}</div>
+          </div>
+        {% empty %}
+          <p class="ap-list-meta">No meetings yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Recent activity -->
+    <div class="ap-two-col">
+      <div class="ap-section">
+        <h2>Recent Signups</h2>
+        <ul class="ap-list">
+          {% for u in recent_users %}
+            <li>
+              <span>{{ u.username }}</span>
+              <span class="ap-list-meta">{{ u.date_joined|date:"M d, Y" }}</span>
+            </li>
+          {% empty %}
+            <li class="ap-list-meta">No users yet.</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="ap-section">
+        <h2>Recent Meetings</h2>
+        <ul class="ap-list">
+          {% for m in recent_meetings %}
+            <li>
+              <span>{{ m.room.title }} <span class="ap-list-meta">({{ m.room.code }})</span></span>
+              <span class="ap-list-meta">{{ m.started_at|date:"M d, H:i" }}</span>
+            </li>
+          {% empty %}
+            <li class="ap-list-meta">No meetings yet.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+  </div>
+  <!-- ===================== end Dashboard tab ===================== -->
+
+  <!-- ===================== Users tab ===================== -->
+  <div class="ap-panel" id="tab-users">
+    <div class="ap-section">
+      <div class="ap-users-toolbar">
+        <h2 style="margin:0;">All Users</h2>
+        <a class="ap-export-btn" href="{% url 'meetings:admin_export_users' %}"><i class="bi bi-download"></i> Export CSV</a>
+      </div>
+      <form method="get" class="ap-search">
+        <input type="hidden" name="tab" value="users">
+        <input type="text" name="q" placeholder="Search by username or email…" value="{{ search_query }}">
+        <button type="submit">Search</button>
+      </form>
+
+      <table class="ap-table">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Email</th>
+            <th>Joined</th>
+            <th>Status</th>
+            <th>Role</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users_page %}
+            <tr>
+              <td>{{ u.username }}</td>
+              <td>{{ u.email|default:"—" }}</td>
+              <td>{{ u.date_joined|date:"M d, Y" }}</td>
+              <td><span class="ap-badge {% if u.is_active %}on{% else %}off{% endif %}">{% if u.is_active %}Active{% else %}Inactive{% endif %}</span></td>
+              <td>
+                {% if u.is_superuser %}<span class="ap-badge staff">Superuser</span>
+                {% elif u.is_staff %}<span class="ap-badge staff">Staff</span>
+                {% else %}<span class="ap-list-meta">Member</span>{% endif %}
+              </td>
+              <td>
+                <div class="ap-row-actions">
+                  <form method="post" action="{% url 'meetings:admin_toggle_user_active' u.id %}">
+                    {% csrf_token %}
+                    <button type="submit" class="ap-btn">{% if u.is_active %}Deactivate{% else %}Activate{% endif %}</button>
+                  </form>
+                  {% if request.user.is_superuser %}
+                    <form method="post" action="{% url 'meetings:admin_toggle_user_staff' u.id %}">
+                      {% csrf_token %}
+                      <button type="submit" class="ap-btn">{% if u.is_staff %}Revoke Staff{% else %}Make Staff{% endif %}</button>
+                    </form>
+                    <form method="post" action="{% url 'meetings:admin_delete_user' u.id %}" onsubmit="return confirm('Delete {{ u.username }} permanently?');">
+                      {% csrf_token %}
+                      <button type="submit" class="ap-btn danger">Delete</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="ap-list-meta">No users found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if users_page.paginator.num_pages > 1 %}
+        <div class="ap-pagination">
+          {% if users_page.has_previous %}
+            <a href="?tab=users&amp;q={{ search_query }}&amp;page={{ users_page.previous_page_number }}">Prev</a>
+          {% endif %}
+          <span class="current">{{ users_page.number }} / {{ users_page.paginator.num_pages }}</span>
+          {% if users_page.has_next %}
+            <a href="?tab=users&amp;q={{ search_query }}&amp;page={{ users_page.next_page_number }}">Next</a>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+  <!-- ===================== end Users tab ===================== -->
+
+</div>
+<!-- ===================== end ap-wrap ===================== -->
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    // ---------------- Tabs ----------------
+    const tabBtns = document.querySelectorAll('.ap-tab-btn');
+    const panels = { dashboard: document.getElementById('tab-dashboard'), users: document.getElementById('tab-users') };
+
+    function activate(tab) {
+      tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+      Object.entries(panels).forEach(([k, el]) => el.classList.toggle('active', k === tab));
+    }
+
+    tabBtns.forEach(btn => btn.addEventListener('click', () => {
+      activate(btn.dataset.tab);
+      const url = new URL(window.location);
+      url.searchParams.set('tab', btn.dataset.tab);
+      window.history.replaceState({}, '', url);
+    }));
+
+    const params = new URLSearchParams(window.location.search);
+    activate(params.get('tab') === 'users' ? 'users' : 'dashboard');
+  });
+</script>
+{% endblock %}
