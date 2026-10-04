@@ -101,9 +101,15 @@ def process_recording(recording_id: int, default_target_lang: str = "hi") -> Non
             except Exception as exc:
                 logger.warning("Summary generation failed (non-fatal): %s", exc)
 
-        _set_status(recording, Recording.STATUS_SUBTITLING, "Embedding subtitles into video (Windows-safe)...")
+        _set_status(recording, Recording.STATUS_SUBTITLING, "Embedding subtitles into the video...")
         convert_to_mp4(raw_path, str(mp4_path))
-        burn_subtitles(str(mp4_path), str(srt_path), str(subtitled_path))
+        burn_subtitles(
+            str(mp4_path),
+            str(srt_path),
+            str(subtitled_path),
+            cues=segments,
+            work_dir=str(work_dir),
+        )
 
         if not subtitled_path.is_file():
             raise FFmpegError("Subtitled video was not created.")
@@ -160,7 +166,7 @@ def process_recording(recording_id: int, default_target_lang: str = "hi") -> Non
 
         if pdf_generated:
             ready_message = (
-                "Done! Download video (enable subtitles in VLC → Subtitle → Track 1) and PDF below."
+                "Done! Download the subtitled video and PDF below."
             )
         else:
             ready_message = (

@@ -18,6 +18,17 @@
  *   conversation — so both (all) sides of the conversation are captured and
  *   the transcript contains everyone's speech.
  *
+ * VIDEO (all participants, not just the recorder):
+ *   Recording the local stream directly would save ONE camera — the person who
+ *   pressed "Record" — even though every peer's camera is on screen. Remote
+ *   video also never lives in window.SMARTMEET_LOCAL_STREAM; it arrives as a
+ *   track on the RTCPeerConnection(s).
+ *   So we paint every participant (local camera + every remote tile) onto a
+ *   canvas in a responsive grid and feed canvas.captureStream() to
+ *   MediaRecorder. The saved video therefore contains EVERYONE on the call,
+ *   with name labels, in a single 16:9 track. Peers joining/leaving mid-
+ *   recording are re-collected on every painted frame.
+ *
  * ADDITIONALLY:
  *   - Audio level monitoring via an AnalyserNode detects when no voice /
  *     and too-quiet audio is being captured, and shows a warning popup.
@@ -64,9 +75,274 @@
   const WARN_COOLDOWN_MS = 20000; // don't visibly spam the user
   let isUploading = false; // guard against duplicate uploads
 
+  // ---- Composite video state (every participant on screen) ----
+  const COMPOSITE_W = 1280;      // fixed 720p keeps MP4 conversion predictable
+  const COMPOSITE_H = 720;
+  const COMPOSITE_FPS = 20;
+  const TILE_PAD = 8;
+  const TILE_RADIUS = 10;
+  let compositeCtx = null;        // 2d context of the recording canvas
+  let compositeStream = null;     // canvas.captureStream() result
+  let compositeLocalStream = null;
+  let compositeHiddenVideo = null; // fallback <video> when #local-video is idle
+  let compositeIntervalId = null;  // steady paint pump (fps-capped)
+  let compositeLastPaint = 0;
+
   function getLocalStream() {
     return window.SMARTMEET_LOCAL_STREAM;
   }
+
+  // ===================== COMPOSITE VIDEO (all participants) =====================
+
+  function hiddenStyle() {
+    return (
+      "position:fixed;left:-10000px;top:0;width:320px;height:180px;" +
+      "opacity:0;pointer-events:none;"
+    );
+  }
+
+  /**
+   * #local-video is the visible tile; it is un-mirrored / detached while the
+   * camera is off or a screen share is shown. When it isn't carrying our camera
+   * we spin up a hidden <video> bound to the raw local stream so the recording
+   * still shows us.
+   */
+  function resolveLocalVideoEl(localStream) {
+    const visible = document.getElementById("local-video");
+    if (visible && visible.srcObject && visible.videoWidth > 0) return visible;
+    if (!localStream || localStream.getVideoTracks().length === 0) {
+      return visible;
+    }
+    if (!compositeHiddenVideo) {
+      compositeHiddenVideo = document.createElement("video");
+      compositeHiddenVideo.muted = true;
+      compositeHiddenVideo.autoplay = true;
+      compositeHiddenVideo.playsInline = true;
+      compositeHiddenVideo.setAttribute("playsinline", "");
+      compositeHiddenVideo.setAttribute("aria-hidden", "true");
+      compositeHiddenVideo.style.cssText = hiddenStyle();
+      document.body.appendChild(compositeHiddenVideo);
+    }
+    if (compositeHiddenVideo.srcObject !== localStream) {
+      try {
+        compositeHiddenVideo.srcObject = localStream;
+      } catch (e) {
+        return visible;
+      }
+    }
+    const p = compositeHiddenVideo.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    return compositeHiddenVideo;
+  }
+
+  /** Local camera first, then every connected remote tile, in join order. */
+  function collectCompositeSources(localStream) {
+    const sources = [];
+    sources.push({
+      key: "__local__",
+      el: resolveLocalVideoEl(localStream),
+      label: (cfg.username ? cfg.username + " (You)" : "You"),
+      mirror: true,
+    });
+
+    const peers = window.SMARTMEET_PEERS || {};
+    Object.keys(peers).forEach((uid) => {
+      const tile = document.getElementById("remote-tile-" + uid);
+      const el = document.getElementById("remote-video-" + uid);
+      if (!tile || !el) return;
+      const nameEl = tile.querySelector(".tile-name");
+      const label = (nameEl && nameEl.textContent ? nameEl.textContent : "User").trim();
+      sources.push({ key: String(uid), el: el, label: label || "User", mirror: false });
+    });
+
+    return sources;
+  }
+
+  function gridFor(count) {
+    if (count <= 1) return [1, 1];
+    if (count === 2) return [2, 1];
+    if (count === 3) return [3, 1];
+    if (count === 4) return [2, 2];
+    const cols = Math.min(4, Math.ceil(Math.sqrt(count)));
+    return [cols, Math.ceil(count / cols)];
+  }
+
+  function roundRectPath(ctx, x, y, w, h, r) {
+    const radius = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
+
+  function fitText(ctx, text, maxWidth) {
+    if (ctx.measureText(text).width <= maxWidth) return text;
+    let cut = text;
+    while (cut.length > 3 && ctx.measureText(cut + "…").width > maxWidth) {
+      cut = cut.slice(0, -1);
+    }
+    return cut + "…";
+  }
+
+  function drawTileName(ctx, label, x, y, w, h, fontSize) {
+    if (!label) return;
+    const barH = Math.round(fontSize * 2.2);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.fillRect(x, y + h - barH, w, barH);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "600 " + fontSize + "px Inter, 'Segoe UI', sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(
+      fitText(ctx, label, w - fontSize * 1.4),
+      x + fontSize * 0.7,
+      y + h - barH / 2
+    );
+  }
+
+  function drawCompositeFrame() {
+    const ctx = compositeCtx;
+    if (!ctx) return;
+
+    ctx.fillStyle = "#0b1220";
+    ctx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+
+    const sources = collectCompositeSources(compositeLocalStream);
+    const count = Math.max(1, sources.length);
+    const grid = gridFor(count);
+    const cols = grid[0];
+    const rows = grid[1];
+
+    const cellW = (COMPOSITE_W - TILE_PAD * (cols + 1)) / cols;
+    const cellH = (COMPOSITE_H - TILE_PAD * (rows + 1)) / rows;
+    // Tiles keep their 16:9 shape and are centred inside their cell, so faces
+    // are never cropped when a participant joins mid-recording.
+    const tileH = Math.min(cellH, (cellW * 9) / 16);
+    const tileW = Math.min(cellW, (tileH * 16) / 9);
+    const fontSize = Math.max(11, Math.min(30, Math.round(tileH * 0.08)));
+
+    for (let i = 0; i < sources.length; i++) {
+      const src = sources[i];
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      const cellX = TILE_PAD + col * (cellW + TILE_PAD);
+      const cellY = TILE_PAD + row * (cellH + TILE_PAD);
+      const x = cellX + (cellW - tileW) / 2;
+      const y = cellY + (cellH - tileH) / 2;
+
+      const v = src.el;
+      const vw = v ? v.videoWidth : 0;
+      const vh = v ? v.videoHeight : 0;
+
+      ctx.save();
+      roundRectPath(ctx, x, y, tileW, tileH, TILE_RADIUS);
+      ctx.fillStyle = "#1f2937";
+      ctx.fill();
+      ctx.clip();
+
+      if (vw > 0 && vh > 0) {
+        if (src.mirror) {
+          // Mirror the local camera, matching what the user sees on their tile.
+          ctx.save();
+          ctx.translate(x + tileW, y);
+          ctx.scale(-1, 1);
+          ctx.drawImage(v, 0, 0, tileW, tileH);
+          ctx.restore();
+        } else {
+          ctx.drawImage(v, x, y, tileW, tileH);
+        }
+      } else {
+        // Camera off / not connected yet — show an initial so the tile still
+        // reads as a participant instead of a black hole in the recording.
+        ctx.fillStyle = "#111827";
+        ctx.fillRect(x, y, tileW, tileH);
+        const initial = ((src.label || "?").trim().charAt(0) || "?").toUpperCase();
+        ctx.fillStyle = "#e5e7eb";
+        ctx.font = "700 " + Math.round(tileH * 0.32) + "px Inter, 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(initial, x + tileW / 2, y + tileH / 2 - tileH * 0.06);
+      }
+
+      drawTileName(ctx, src.label, x, y, tileW, tileH, fontSize);
+      ctx.restore();
+    }
+  }
+
+  function compositeTick() {
+    if (!compositeCtx) return;
+    try {
+      drawCompositeFrame();
+    } catch (e) {
+      console.warn("SmartMeet recorder: composite frame failed", e);
+    }
+    compositeLastPaint = performance.now();
+  }
+
+  function startCompositePump() {
+    if (compositeIntervalId) clearInterval(compositeIntervalId);
+    compositeTick(); // paint frame 1 before captureStream() is created
+    // A timer keeps painting even in background tabs (where rAF pauses).
+    // Frame timestamps come from the wall clock, so a dropped frame never
+    // desynchronises the video from the recorded audio.
+    compositeIntervalId = setInterval(compositeTick, Math.round(1000 / COMPOSITE_FPS));
+  }
+
+  function stopCompositePump() {
+    if (compositeIntervalId) {
+      clearInterval(compositeIntervalId);
+      compositeIntervalId = null;
+    }
+  }
+
+  /** Returns the composited canvas video track, or null if unsupported. */
+  function startCompositeVideo(localStream) {
+    const canvas = document.createElement("canvas");
+    canvas.width = COMPOSITE_W;
+    canvas.height = COMPOSITE_H;
+    if (typeof canvas.captureStream !== "function") return null;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) return null;
+
+    compositeCtx = ctx;
+    compositeLocalStream = localStream;
+    compositeLastPaint = 0;
+
+    startCompositePump(); // paints frame 1 immediately, before the track exists
+
+    const stream = canvas.captureStream(COMPOSITE_FPS);
+    compositeStream = stream;
+    return stream.getVideoTracks()[0] || null;
+  }
+
+  function stopCompositeVideo() {
+    stopCompositePump();
+    if (compositeStream) {
+      compositeStream.getTracks().forEach((t) => {
+        try { t.stop(); } catch (e) {}
+      });
+      compositeStream = null;
+    }
+    compositeCtx = null;
+    compositeLocalStream = null;
+    if (compositeHiddenVideo) {
+      try { compositeHiddenVideo.srcObject = null; } catch (e) {}
+      if (compositeHiddenVideo.parentNode) {
+        compositeHiddenVideo.parentNode.removeChild(compositeHiddenVideo);
+      }
+      compositeHiddenVideo = null;
+    }
+  }
+
+  // =================== END COMPOSITE VIDEO ===================
 
   function pickMimeType() {
     const candidates = [
@@ -218,7 +494,20 @@
     remoteSourceCount = 0;
 
     const out = new MediaStream();
-    const videoTrack = localStream.getVideoTracks()[0];
+
+    // Video: composite EVERY participant (local + remotes) onto one canvas so
+    // the saved file shows the whole call, not just whoever pressed Record.
+    // Falls back to the raw camera track if compositing is unavailable.
+    let videoTrack = null;
+    try {
+      videoTrack = startCompositeVideo(localStream);
+    } catch (e) {
+      console.warn("SmartMeet recorder: composite video unavailable", e);
+      stopCompositeVideo();
+    }
+    if (!videoTrack) {
+      videoTrack = localStream.getVideoTracks()[0];
+    }
     if (videoTrack) out.addTrack(videoTrack);
 
     // Local mic
@@ -243,6 +532,7 @@
       clearInterval(peerPollInterval);
       peerPollInterval = null;
     }
+    stopCompositeVideo();
     sourceNodes.forEach((src) => {
       try { src.disconnect(); } catch (e) {}
     });

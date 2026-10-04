@@ -144,19 +144,57 @@
     letter-spacing: 0.02em;
   }
 
-  .room-code-row { display: flex; align-items: center; gap: 0.4rem; }
+  .room-code-row { display: flex; align-items: center; gap: 0.5rem; }
 
+  /* Copy room code — a real, labelled pill rather than a bare icon, so it's
+     discoverable. States: default → .copied (green check, held briefly). */
   .copy-code-btn {
-    border: none;
-    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border: 1px solid var(--mm-border);
+    background-color: var(--mm-panel);
     color: var(--mm-text-dim);
-    font-size: 0.75rem;
-    padding: 1px 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 4px 9px;
     cursor: pointer;
-    border-radius: 4px;
-    transition: color 0.15s, background-color 0.15s;
+    border-radius: 999px;
+    transition: color 0.15s, background-color 0.15s, border-color 0.15s;
   }
-  .copy-code-btn:hover { color: var(--mm-text); background-color: var(--mm-panel-high); }
+  .copy-code-btn:hover {
+    color: var(--mm-text);
+    background-color: var(--mm-panel-high);
+    border-color: var(--mm-accent);
+  }
+  .copy-code-btn:focus-visible { outline: 2px solid var(--mm-accent); outline-offset: 2px; }
+  .copy-code-btn.copied {
+    color: var(--mm-success);
+    background-color: rgba(78, 222, 163, 0.12);
+    border-color: rgba(78, 222, 163, 0.45);
+  }
+  .copy-code-btn.failed { color: var(--mm-danger); border-color: rgba(255, 180, 171, 0.45); }
+  .copy-code-btn .bi { font-size: 0.78rem; }
+
+  /* Confirmation toast shown after a successful copy. Reuses the hand-raise
+     toast stack/animation, with its own shorter hold time. */
+  .copy-toast {
+    background-color: var(--mm-panel-high);
+    border: 1px solid rgba(78, 222, 163, 0.4);
+    color: var(--mm-text);
+    padding: 9px 16px;
+    border-radius: 24px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    animation: toast-in 0.25s ease-out, toast-out 0.3s ease-in 1.4s forwards;
+  }
+  .copy-toast .bi { color: var(--mm-success); font-size: 1rem; }
+  .copy-toast.failed { border-color: rgba(255, 180, 171, 0.4); }
+  .copy-toast.failed .bi { color: var(--mm-danger); }
 
   .header-right { display: flex; align-items: center; gap: 0.85rem; flex-shrink: 0; }
 
@@ -1132,6 +1170,8 @@
     .meeting-sidebar:not(.collapsed) { transform: translateX(0); }
     .control-label { display: none; }
     .control-bar-inner { gap: 0.8rem; padding: 0.6rem 1rem; }
+    .copy-code-label { display: none; }
+    .copy-code-btn { padding: 4px 6px; }
   }
 </style>
 
@@ -1152,8 +1192,10 @@
       </div>
       <div class="text-muted small room-code-row">
         <i class="bi bi-hash"></i> <span id="room-code">{{ room.code }}</span>
-        <button class="copy-code-btn" id="copy-code-btn" title="Copy room code">
-          <i class="bi bi-clipboard"></i>
+        <button type="button" class="copy-code-btn" id="copy-code-btn"
+                title="Copy room code" aria-label="Copy room code">
+          <i class="bi bi-clipboard" id="copy-code-icon"></i>
+          <span class="copy-code-label" id="copy-code-label">Copy</span>
         </button>
       </div>
     </div>
@@ -1202,7 +1244,7 @@
   <!-- Main Body -->
   <div class="meeting-body">
 
-    <!-- Hand-raise toast notifications -->
+    <!-- Shared toast stack (hand-raise notices, copy confirmations) -->
     <div class="hand-toast-stack" id="hand-toast-stack"></div>
 
     <!-- Floating reaction layer (thumbs up / heart / funny pop up here) -->
@@ -2479,13 +2521,68 @@
 
     // ---------------- Copy room code ----------------
     const copyBtn = document.getElementById('copy-code-btn');
+    const copyIcon = document.getElementById('copy-code-icon');
+    const copyLabel = document.getElementById('copy-code-label');
+
+    // navigator.clipboard is only exposed in secure contexts, so plain-HTTP
+    // dev servers have it undefined (or its writeText() rejects). Fall back to
+    // the legacy selection trick there so the button still works.
+    function writeToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      return new Promise((resolve, reject) => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '-1000px';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        ta.remove();
+        ok ? resolve() : reject(new Error('copy-unavailable'));
+      });
+    }
+
+    function showCopyToast(ok, code) {
+      const stack = document.getElementById('hand-toast-stack');
+      if (!stack) return;
+      const toast = document.createElement('div');
+      toast.className = 'copy-toast' + (ok ? '' : ' failed');
+      toast.setAttribute('role', 'status');
+      toast.innerHTML = ok
+        ? `<i class="bi bi-check-circle-fill"></i><span>Room code <strong>${escapeHtml(code)}</strong> copied</span>`
+        : `<i class="bi bi-exclamation-circle-fill"></i><span>Couldn\'t copy — select the code and copy manually</span>`;
+      stack.appendChild(toast);
+      setTimeout(() => toast.remove(), 1900);
+    }
+
     if (copyBtn) {
+      let copyResetTimer = null;
+
+      function setCopyState(state) {
+        copyBtn.classList.remove('copied', 'failed');
+        if (state) copyBtn.classList.add(state);
+        if (copyIcon) {
+          copyIcon.className = 'bi ' + (
+            state === 'copied' ? 'bi-check2' :
+            state === 'failed' ? 'bi-exclamation' : 'bi-clipboard'
+          );
+        }
+        if (copyLabel) copyLabel.textContent = state === 'copied' ? 'Copied!' : 'Copy';
+        clearTimeout(copyResetTimer);
+        copyResetTimer = setTimeout(() => setCopyState(null), 1800);
+      }
+
       copyBtn.addEventListener('click', function () {
         const code = document.getElementById('room-code').textContent.trim();
-        navigator.clipboard.writeText(code).then(() => {
-          copyBtn.innerHTML = '<i class="bi bi-check2"></i>';
-          setTimeout(() => { copyBtn.innerHTML = '<i class="bi bi-clipboard"></i>'; }, 1200);
-        }).catch(() => {});
+        writeToClipboard(code)
+          .then(() => { setCopyState('copied'); showCopyToast(true, code); })
+          .catch(() => { setCopyState('failed'); showCopyToast(false, code); });
       });
     }
 
