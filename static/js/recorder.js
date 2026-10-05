@@ -3,6 +3,19 @@
  *
  * Multi-participant conversation recording.
  *
+ * VIDEO (split screen of everyone, not just the recorder):
+ *   Recording the local stream directly saves ONE camera — the person who
+ *   pressed "Record" — even though every peer's camera is on screen. Remote
+ *   video never lives in window.SMARTMEET_LOCAL_STREAM; it arrives as a track
+ *   on the RTCPeerConnection(s).
+ *   So every participant (local camera + every remote peer, falling back to
+ *   the raw incoming WebRTC track when a tile is missing) is painted onto a
+ *   canvas in a responsive grid — 2 participants ⇒ side-by-side split screen,
+ *   3 ⇒ three columns, 4 ⇒ 2x2 — and canvas.captureStream() is fed to
+ *   MediaRecorder. Frames are drawn "contained" (aspect ratio preserved) so
+ *   the entire person is always visible. Peers joining/leaving mid-recording
+ *   are re-collected on every painted frame.
+ *
  * PROBLEM (one-sided audio):
  *   MediaRecorder can only record what's actually inside the MediaStream
  *   you hand it. window.SMARTMEET_LOCAL_STREAM only ever contains *this
@@ -17,17 +30,6 @@
  *   MediaStreamAudioDestinationNode. Each user records that COMBINED
  *   conversation — so both (all) sides of the conversation are captured and
  *   the transcript contains everyone's speech.
- *
- * VIDEO (all participants, not just the recorder):
- *   Recording the local stream directly would save ONE camera — the person who
- *   pressed "Record" — even though every peer's camera is on screen. Remote
- *   video also never lives in window.SMARTMEET_LOCAL_STREAM; it arrives as a
- *   track on the RTCPeerConnection(s).
- *   So we paint every participant (local camera + every remote tile) onto a
- *   canvas in a responsive grid and feed canvas.captureStream() to
- *   MediaRecorder. The saved video therefore contains EVERYONE on the call,
- *   with name labels, in a single 16:9 track. Peers joining/leaving mid-
- *   recording are re-collected on every painted frame.
  *
  * ADDITIONALLY:
  *   - Audio level monitoring via an AnalyserNode detects when no voice /
@@ -87,6 +89,7 @@
   let compositeHiddenVideo = null; // fallback <video> when #local-video is idle
   let compositeIntervalId = null;  // steady paint pump (fps-capped)
   let compositeLastPaint = 0;
+  let lastSourceCount = 0;         // only log when the participant count changes
 
   function getLocalStream() {
     return window.SMARTMEET_LOCAL_STREAM;
@@ -135,7 +138,56 @@
     return compositeHiddenVideo;
   }
 
-  /** Local camera first, then every connected remote tile, in join order. */
+  // Hidden <video> elements bound straight to a peer's incoming video track.
+  // Used when the visible tile is missing (late tile creation, DOM change,
+  // tile removed) so a connected participant can NEVER silently drop out of
+  // the recording — the recording mirrors the WebRTC peers, not the page.
+  const hiddenPeerVideos = new Map();
+
+  function remoteVideoEl(uid) {
+    const tile = document.getElementById("remote-tile-" + uid);
+    const el = document.getElementById("remote-video-" + uid);
+    if (tile && el) return el;
+
+    const pc = (window.SMARTMEET_PEERS || {})[uid];
+    if (!pc || typeof pc.getReceivers !== "function") return null;
+    let track = null;
+    try {
+      track =
+        pc.getReceivers()
+          .map((r) => r.track)
+          .find((t) => t && t.kind === "video" && t.readyState === "live") || null;
+    } catch (e) {
+      return null;
+    }
+    if (!track) return null;
+
+    let v = hiddenPeerVideos.get(uid);
+    if (!v) {
+      v = document.createElement("video");
+      v.muted = true;
+      v.autoplay = true;
+      v.playsInline = true;
+      v.setAttribute("playsinline", "");
+      v.setAttribute("aria-hidden", "true");
+      v.style.cssText = hiddenStyle();
+      document.body.appendChild(v);
+      hiddenPeerVideos.set(uid, v);
+    }
+    const live = v.srcObject ? v.srcObject.getVideoTracks() : [];
+    if (!live.some((t) => t.id === track.id)) {
+      try {
+        v.srcObject = new MediaStream([track]);
+      } catch (e) {
+        return null;
+      }
+    }
+    const p = v.play();
+    if (p && typeof p.catch === "function") p.catch(() => {});
+    return v;
+  }
+
+  /** Local camera first, then every connected remote peer, in join order. */
   function collectCompositeSources(localStream) {
     const sources = [];
     sources.push({
@@ -147,12 +199,12 @@
 
     const peers = window.SMARTMEET_PEERS || {};
     Object.keys(peers).forEach((uid) => {
+      const el = remoteVideoEl(uid);
+      if (!el) return;
       const tile = document.getElementById("remote-tile-" + uid);
-      const el = document.getElementById("remote-video-" + uid);
-      if (!tile || !el) return;
-      const nameEl = tile.querySelector(".tile-name");
-      const label = (nameEl && nameEl.textContent ? nameEl.textContent : "User").trim();
-      sources.push({ key: String(uid), el: el, label: label || "User", mirror: false });
+      const nameEl = tile ? tile.querySelector(".tile-name") : null;
+      const label = (nameEl && nameEl.textContent ? nameEl.textContent : "Participant").trim();
+      sources.push({ key: String(uid), el: el, label: label || "Participant", mirror: false });
     });
 
     return sources;
@@ -160,6 +212,7 @@
 
   function gridFor(count) {
     if (count <= 1) return [1, 1];
+    // Two participants = a clean side-by-side split screen (2 columns, 1 row).
     if (count === 2) return [2, 1];
     if (count === 3) return [3, 1];
     if (count === 4) return [2, 2];
@@ -216,6 +269,15 @@
 
     const sources = collectCompositeSources(compositeLocalStream);
     const count = Math.max(1, sources.length);
+    if (count !== lastSourceCount) {
+      lastSourceCount = count;
+      console.log(
+        "[recorder] composite participants:",
+        count,
+        "—",
+        sources.map((s) => s.label).join(" | ")
+      );
+    }
     const grid = gridFor(count);
     const cols = grid[0];
     const rows = grid[1];
@@ -248,15 +310,26 @@
       ctx.clip();
 
       if (vw > 0 && vh > 0) {
+        // "Contain" the frame inside the tile: the whole person stays in
+        // shot with the correct aspect ratio — never stretched sideways and
+        // never cropped at the edges. Unused space is letterboxed.
+        const scale = Math.min(tileW / vw, tileH / vh);
+        const dw = Math.max(1, Math.round(vw * scale));
+        const dh = Math.max(1, Math.round(vh * scale));
+        const dx = x + Math.round((tileW - dw) / 2);
+        const dy = y + Math.round((tileH - dh) / 2);
+
+        ctx.fillStyle = "#000000";
+        ctx.fillRect(x, y, tileW, tileH);
         if (src.mirror) {
           // Mirror the local camera, matching what the user sees on their tile.
           ctx.save();
-          ctx.translate(x + tileW, y);
+          ctx.translate(dx + dw, dy);
           ctx.scale(-1, 1);
-          ctx.drawImage(v, 0, 0, tileW, tileH);
+          ctx.drawImage(v, 0, 0, dw, dh);
           ctx.restore();
         } else {
-          ctx.drawImage(v, x, y, tileW, tileH);
+          ctx.drawImage(v, dx, dy, dw, dh);
         }
       } else {
         // Camera off / not connected yet — show an initial so the tile still
@@ -315,6 +388,9 @@
     compositeCtx = ctx;
     compositeLocalStream = localStream;
     compositeLastPaint = 0;
+    // Debug hook: lets you (or an automated harness) grab the split-screen
+    // canvas that MediaRecorder is capturing.
+    window.SMARTMEET_CANVAS = canvas;
 
     startCompositePump(); // paints frame 1 immediately, before the track exists
 
@@ -333,6 +409,13 @@
     }
     compositeCtx = null;
     compositeLocalStream = null;
+    window.SMARTMEET_CANVAS = null;
+    lastSourceCount = 0;
+    hiddenPeerVideos.forEach((v) => {
+      try { v.srcObject = null; } catch (e) {}
+      if (v.parentNode) v.parentNode.removeChild(v);
+    });
+    hiddenPeerVideos.clear();
     if (compositeHiddenVideo) {
       try { compositeHiddenVideo.srcObject = null; } catch (e) {}
       if (compositeHiddenVideo.parentNode) {
@@ -365,7 +448,13 @@
     warnCooldownUntil = now + WARN_COOLDOWN_MS;
 
     let title, message;
-    if (type === "low-level") {
+    if (type === "no-composite") {
+      title = "Split-screen recording unavailable";
+      message =
+        "This browser could not composite everyone into one video, so the " +
+        "recording will contain ONLY your camera. Open the meeting in " +
+        "Chrome or Edge (Chromium) to record every participant side by side.";
+    } else if (type === "low-level") {
       title = "Audio quality warning";
       message =
         "The recording is capturing very little / no voice. " +
@@ -452,24 +541,104 @@
     if (!pc || peerListenerAttached.has(pc)) return;
     peerListenerAttached.add(pc);
 
-    // Audio already flowing on this connection
-    pc.getReceivers()
-      .filter((r) => r.track && r.track.kind === "audio")
-      .forEach((r) => addAudioTrackToMix(r.track, true));
+    try {
+      // Audio already flowing on this connection
+      if (typeof pc.getReceivers === "function") {
+        pc.getReceivers()
+          .filter((r) => r.track && r.track.kind === "audio")
+          .forEach((r) => addAudioTrackToMix(r.track, true));
+      }
 
-    // Audio arriving later (new participant, renegotiation)
-    pc.addEventListener("track", (e) => {
-      if (e.track && e.track.kind === "audio") addAudioTrackToMix(e.track, true);
-    });
+      // Audio arriving later (new participant, renegotiation)
+      if (typeof pc.addEventListener === "function") {
+        pc.addEventListener("track", (e) => {
+          if (e.track && e.track.kind === "audio") addAudioTrackToMix(e.track, true);
+        });
+      }
+    } catch (e) {
+      // Never let one peer's audio break the recording (and with it the
+      // split-screen video) — skip this peer's audio instead.
+      console.warn("SmartMeet recorder: could not attach peer audio", e);
+    }
   }
 
   function attachAllKnownPeers() {
     if (!window.SMARTMEET_PEERS) return;
-    Object.values(window.SMARTMEET_PEERS).forEach(attachPeerAudio);
+    Object.values(window.SMARTMEET_PEERS).forEach((pc) => {
+      try {
+        attachPeerAudio(pc);
+      } catch (e) {
+        console.warn("SmartMeet recorder: peer audio attach failed", e);
+      }
+    });
   }
 
   function buildMixedStream(localStream) {
+    const out = new MediaStream();
+
+    // ---- VIDEO: composite EVERY participant (local + every remote peer) onto
+    // one canvas, so the saved file shows the whole call in split screen
+    // instead of only whoever pressed Record. Falls back to the raw camera
+    // track only when the browser genuinely cannot composite.
+    let videoTrack = null;
+    try {
+      videoTrack = startCompositeVideo(localStream);
+    } catch (e) {
+      console.warn("SmartMeet recorder: composite video unavailable", e);
+      stopCompositeVideo();
+    }
+    if (!videoTrack) {
+      console.warn(
+        "SmartMeet recorder: composite canvas unavailable — the recording will " +
+          "contain ONLY this camera. Use a Chromium-based browser for split-screen recording."
+      );
+      // Never fail silently: the user must know the saved file will show one
+      // person instead of the whole call.
+      showWarningPopup("no-composite");
+      videoTrack = localStream.getVideoTracks()[0];
+    }
+    if (videoTrack) out.addTrack(videoTrack);
+
+    // ---- AUDIO: mixed conversation (local mic + every remote peer).
+    // Deliberately isolated from the video above: an audio problem must NEVER
+    // throw the split-screen VIDEO track away and silently downgrade the
+    // recording to a single camera.
+    let audioMixOk = false;
+    try {
+      setupAudioMix();
+      audioMixOk = true;
+    } catch (e) {
+      console.warn("SmartMeet recorder: audio mixing unavailable, using raw mic", e);
+      if (peerPollInterval) {
+        clearInterval(peerPollInterval);
+        peerPollInterval = null;
+      }
+      teardownAudio();
+    }
+
+    if (audioMixOk) {
+      // Local mic
+      localStream.getAudioTracks().forEach((t) => addAudioTrackToMix(t, false));
+
+      // Every remote participant currently connected
+      attachAllKnownPeers();
+
+      // New peers joining mid-recording — poll lightly
+      peerPollInterval = setInterval(attachAllKnownPeers, 1500);
+
+      destNode.stream.getAudioTracks().forEach((t) => out.addTrack(t));
+    } else {
+      // No mixing available — at least record our own microphone.
+      localStream.getAudioTracks().forEach((t) => out.addTrack(t));
+    }
+
+    return out;
+  }
+
+  /** Create the AudioContext graph used for the mixed conversation recording. */
+  function setupAudioMix() {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) throw new Error("Web Audio API unavailable");
     audioCtx = new AudioCtx();
     // Resume in case the browser created it in a "suspended" state
     // (some autoplay policies do this for contexts created outside a user
@@ -478,6 +647,25 @@
       audioCtx.resume().catch(() => {});
     }
     destNode = audioCtx.createMediaStreamDestination();
+
+    // KEEP-ALIVE (critical): a MediaStreamDestination with nothing connected
+    // to it never emits a single audio frame. Chrome's MediaRecorder then
+    // stalls on that track and produces a ZERO-BYTE file — i.e. the whole
+    // recording (video included) is silently lost whenever recording starts
+    // before any mic/peer audio has been mixed in. A permanently connected,
+    // zero-gain oscillator keeps the graph rendering while contributing
+    // absolute silence; real sources are mixed in on top of it.
+    try {
+      const keepAlive = audioCtx.createOscillator();
+      const keepAliveGain = audioCtx.createGain();
+      keepAliveGain.gain.value = 0;
+      keepAlive.connect(keepAliveGain);
+      keepAliveGain.connect(destNode);
+      keepAlive.start();
+    } catch (e) {
+      console.warn("SmartMeet recorder: audio keep-alive unavailable", e);
+    }
+
     // AnalyserNodes tap the mixed audio for live level monitoring (each
     // source connects to them in parallel with the destination).
     analyser = audioCtx.createAnalyser();
@@ -492,47 +680,10 @@
     sourceNodes = new Map();
     peerListenerAttached = new WeakSet();
     remoteSourceCount = 0;
-
-    const out = new MediaStream();
-
-    // Video: composite EVERY participant (local + remotes) onto one canvas so
-    // the saved file shows the whole call, not just whoever pressed Record.
-    // Falls back to the raw camera track if compositing is unavailable.
-    let videoTrack = null;
-    try {
-      videoTrack = startCompositeVideo(localStream);
-    } catch (e) {
-      console.warn("SmartMeet recorder: composite video unavailable", e);
-      stopCompositeVideo();
-    }
-    if (!videoTrack) {
-      videoTrack = localStream.getVideoTracks()[0];
-    }
-    if (videoTrack) out.addTrack(videoTrack);
-
-    // Local mic
-    localStream.getAudioTracks().forEach((t) => addAudioTrackToMix(t, false));
-
-    // Every remote participant currently connected
-    attachAllKnownPeers();
-
-    // New peers joining mid-recording — poll lightly
-    peerPollInterval = setInterval(attachAllKnownPeers, 1500);
-
-    destNode.stream.getAudioTracks().forEach((t) => out.addTrack(t));
-    return out;
   }
 
-  function teardownMix() {
-    if (levelMeterInterval) {
-      clearInterval(levelMeterInterval);
-      levelMeterInterval = null;
-    }
-    if (peerPollInterval) {
-      clearInterval(peerPollInterval);
-      peerPollInterval = null;
-    }
-    stopCompositeVideo();
+  /** Dispose the audio graph only — leaves the composite video untouched. */
+  function teardownAudio() {
     sourceNodes.forEach((src) => {
       try { src.disconnect(); } catch (e) {}
     });
@@ -551,6 +702,19 @@
       audioCtx = null;
     }
     destNode = null;
+  }
+
+  function teardownMix() {
+    if (levelMeterInterval) {
+      clearInterval(levelMeterInterval);
+      levelMeterInterval = null;
+    }
+    if (peerPollInterval) {
+      clearInterval(peerPollInterval);
+      peerPollInterval = null;
+    }
+    stopCompositeVideo();
+    teardownAudio();
     mixedStream = null;
   }
 
@@ -676,6 +840,13 @@
           console.error("Upload failed", e);
           alert("Recording upload failed. Try again from the meeting details page.");
         }
+      } else {
+        // Never fail silently — an empty file means the recording is lost.
+        console.error("SmartMeet recorder: recording produced no data");
+        alert(
+          "The recording came out empty and could not be saved. " +
+            "Please try recording again (check that your camera is on)."
+        );
       }
     };
     mediaRecorder.stop();
@@ -697,7 +868,14 @@
     btnRecord.addEventListener("click", () => {
       const localStream = getLocalStream();
       if (!localStream) {
-        alert("Wait for camera to be ready before recording.");
+        // The join-time getUserMedia failed (permission denied / no device).
+        // Retry now instead of just refusing — recording is available to
+        // every participant, not only the ones whose camera came up.
+        if (window.SMARTMEET_INIT_MEDIA) window.SMARTMEET_INIT_MEDIA();
+        alert(
+          "Camera/microphone access is needed to record. We've asked for it " +
+            "again — allow it, then press Record."
+        );
         return;
       }
 

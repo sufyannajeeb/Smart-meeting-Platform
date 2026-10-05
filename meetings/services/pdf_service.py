@@ -129,6 +129,22 @@ _FONT_SOURCES = (
             ("/usr/share/fonts/truetype/noto/NotoSansKR-Bold.ttf", 0),
         ),
     ),
+    (
+        (
+            (r"C:\Windows\Fonts\Nirmala.ttf", 0),
+            (r"C:\Windows\Fonts\NirmalaUI.ttf", 0),
+            ("/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf", 0),
+            (os.path.join("static", "fonts", "NotoSansMalayalam-Regular.ttf"), 0),
+            (os.path.join("static", "fonts", "Manjari-Regular.ttf"), 0),
+        ),
+        (
+            (r"C:\Windows\Fonts\NirmalaB.ttf", 0),
+            (r"C:\Windows\Fonts\NirmalaUIB.ttf", 0),
+            ("/usr/share/fonts/truetype/noto/NotoSansMalayalam-Bold.ttf", 0),
+            (os.path.join("static", "fonts", "NotoSansMalayalam-Bold.ttf"), 0),
+            (os.path.join("static", "fonts", "Manjari-Bold.ttf"), 0),
+        ),
+    ),
 )
 
 _LINUX_SCRIPT_FONTS = (

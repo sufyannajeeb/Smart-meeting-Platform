@@ -27,6 +27,14 @@ class Room(models.Model):
 class Meeting(models.Model):
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="meetings")
     host = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # Everyone who opened the room page for this meeting (host included).
+    # Used so a participant can find their meeting — and the recording they
+    # saved — from their own dashboard, not just the host.
+    participants = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name="attended_meetings",
+    )
     started_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
 
@@ -56,7 +64,18 @@ class Recording(models.Model):
         (STATUS_FAILED, "Failed"),
     ]
 
-    meeting = models.OneToOneField(Meeting, on_delete=models.CASCADE, related_name="recording")
+    # One row per participant-per-meeting: everybody in the call can press
+    # Record and keep their OWN subtitled video instead of overwriting the
+    # host's (this used to be a OneToOne, so the last upload silently deleted
+    # everyone else's transcript and video).
+    meeting = models.ForeignKey(Meeting, on_delete=models.CASCADE, related_name="recordings")
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="recordings",
+    )
     video_file = models.FileField(upload_to="recordings/raw/")
     subtitled_video = models.FileField(upload_to="recordings/subtitled/", blank=True, null=True)
     duration_seconds = models.PositiveIntegerField(default=0)

@@ -72,10 +72,18 @@ _LANG_CODE_TO_NAME = {
 
 
 def _resolve_lang(code: str) -> str:
-    """Resolve a short ISO-639-1 code to a full language name for deep_translator."""
+    """Resolve an ISO code (en, ml, ml-IN, ML) to a full language name."""
     if code == "auto":
         return "auto"
-    return _LANG_CODE_TO_NAME.get(code, code)
+    key = str(code).strip().lower().replace("_", "-")
+    if key in _LANG_CODE_TO_NAME:
+        return _LANG_CODE_TO_NAME[key]
+    base = key.split("-")[0]  # ml-in -> ml
+    if base in _LANG_CODE_TO_NAME:
+        return _LANG_CODE_TO_NAME[base]
+    if key in _LANG_CODE_TO_NAME.values():  # already a full name
+        return key
+    raise ValueError(f"Unsupported language code: {code!r}")
 
 
 def _split_chunks(text: str, limit: int) -> list[str]:
@@ -158,6 +166,8 @@ def _translate_with_fallback(text: str, target_lang: str, source_lang: str) -> s
 def translate_text(text: str, target_lang: str, source_lang: str = "auto") -> str:
     if not text.strip():
         return ""
-    if target_lang == source_lang:
+    if _resolve_lang(target_lang) == _resolve_lang(source_lang):
         return text
-    return _translate_with_fallback(text, target_lang, source_lang)
+    result = _translate_with_fallback(text, target_lang, source_lang)
+    logger.info("Translated to %s: %r", target_lang, result[:80])
+    return result

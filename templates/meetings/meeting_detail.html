@@ -18,6 +18,7 @@
   hr { border-color: #30363d; }
   .border { border-color: #30363d !important; }
   .progress { background-color: #21262d; }
+  .recording-block { border-left: 3px solid #1f6feb; padding-left: 1rem; }
 </style>
 <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
   <div>
@@ -27,187 +28,228 @@
   <a href="{% url 'meetings:dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
 </div>
 
-{% if recording %}
-<div class="card shadow-sm border-0 mb-4">
-  <div class="card-body">
-    <h5 class="card-title">AI Processing Status</h5>
-    <div id="processing-status" data-recording-id="{{ recording.id }}">
-      <span class="badge text-bg-{% if recording.status == 'ready' %}success{% elif recording.status == 'failed' %}danger{% else %}warning{% endif %}">
-        {{ recording.get_status_display }}
-      </span>
-      <p class="mt-2 mb-0 small text-muted" id="status-message">{{ recording.status_message|truncatechars:300 }}</p>
-    </div>
-    {% if recording.status == 'failed' %}
-    <form method="post" action="{% url 'meetings:retry_processing' recording.id %}" class="mt-3">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-warning btn-sm">Retry processing</button>
-    </form>
-    {% endif %}
-    {% if recording.status != 'ready' and recording.status != 'failed' %}
-    <div class="progress mt-3" style="height: 8px;">
-      <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 60%"></div>
-    </div>
-    {% endif %}
+{% if recordings %}
+  {% if recordings|length > 1 %}
+  <div class="alert alert-info">
+    <i class="bi bi-people-fill me-1"></i>
+    {{ recordings|length }} participants saved a recording of this meeting.
+    Each one is a split-screen video of everyone who joined, with subtitles burned in.
   </div>
-</div>
+  {% endif %}
 
-{% if transcript %}
-<div class="card shadow-sm border-0 mb-4">
-  <div class="card-header bg-white fw-semibold d-flex align-items-center">
-    <i class="bi bi-stars me-2"></i> Meeting Summary
-    {% if transcript.language %}
-    <span class="badge text-bg-secondary ms-2">{{ transcript.language }}{% if transcript.summary_json.summary %} &middot; minutes available{% endif %}</span>
-    {% endif %}
-  </div>
-  <div class="card-body">
-    {% with summary=transcript.summary_json %}
-    {% if summary and summary.summary %}
-      {% if summary.main_topic %}
-      <div class="mb-3">
-        <div class="small fw-semibold text-uppercase mb-1" style="color: #8b949e;">Main topic</div>
-        <h5 class="mb-0" style="color: #f0f6fc;">{{ summary.main_topic }}</h5>
+  {% for item in recordings %}
+  {% with rec=item.recording transcript=item.transcript %}
+  <div class="recording-block mb-5">
+
+    <div class="card shadow-sm border-0 mb-4">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+          <h5 class="card-title mb-1">
+            <i class="bi bi-record-circle me-1"></i>Recording
+            {% if rec.recorded_by %}
+              <span class="badge text-bg-secondary">by {{ rec.recorded_by.username }}</span>
+            {% else %}
+              <span class="badge text-bg-secondary">participant</span>
+            {% endif %}
+          </h5>
+          <span class="small text-muted">{{ rec.created_at|date:"d M Y, H:i" }}{% if rec.duration_seconds %} &middot; {{ rec.duration_seconds|floatformat:0 }}s{% endif %}</span>
+        </div>
+        <div class="processing-status mt-2" data-recording-id="{{ rec.id }}" data-done="{% if rec.status == 'ready' or rec.status == 'failed' %}1{% else %}0{% endif %}">
+          <span class="badge text-bg-{% if rec.status == 'ready' %}success{% elif rec.status == 'failed' %}danger{% else %}warning{% endif %}">
+            {{ rec.get_status_display }}
+          </span>
+          <p class="mt-2 mb-0 small text-muted status-message">{{ rec.status_message|truncatechars:300 }}</p>
+        </div>
+        {% if rec.status == 'failed' %}
+        <form method="post" action="{% url 'meetings:retry_processing' rec.id %}" class="mt-3">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-warning btn-sm">Retry processing</button>
+        </form>
+        {% endif %}
+        {% if rec.status != 'ready' and rec.status != 'failed' %}
+        <div class="progress mt-3" style="height: 8px;">
+          <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 60%"></div>
+        </div>
+        {% endif %}
       </div>
-      {% endif %}
-      <div class="mb-3">
-        <div class="small fw-semibold text-uppercase mb-1" style="color: #8b949e;">Overview</div>
-        <p class="mb-0" style="line-height: 1.7; letter-spacing: 0.01em;">{{ summary.summary }}</p>
+    </div>
+
+    {% if transcript %}
+    <div class="card shadow-sm border-0 mb-4">
+      <div class="card-header bg-white fw-semibold d-flex align-items-center">
+        <i class="bi bi-stars me-2"></i> Meeting Summary
+        {% if transcript.language %}
+        <span class="badge text-bg-secondary ms-2">{{ transcript.language }}{% if transcript.summary_json.summary %} &middot; minutes available{% endif %}</span>
+        {% endif %}
       </div>
-      {% if summary.highlights %}
-      <div class="mb-3">
-        <div class="small fw-semibold text-uppercase mb-2" style="color: #8b949e;">Highlights</div>
-        <ul class="mb-0">
-          {% for h in summary.highlights %}
-          <li class="mb-1">{{ h }}</li>
-          {% endfor %}
-        </ul>
-      </div>
-      {% endif %}
-      {% if summary.minutes %}
-        {% for section in summary.minutes %}
-          {% if section.items %}
+      <div class="card-body">
+        {% with summary=transcript.summary_json %}
+        {% if summary and summary.summary %}
+          {% if summary.main_topic %}
           <div class="mb-3">
-            <div class="small fw-semibold text-uppercase mb-2" style="color: #8b949e;">{{ section.heading }}</div>
-            <ul class="mb-0">
-              {% for item in section.items %}
-              <li class="mb-1">{{ item }}</li>
-              {% endfor %}
-            </ul>
+            <div class="small fw-semibold text-uppercase text-muted mb-1">Main topic</div>
+            <h5 class="mb-0 text-light">{{ summary.main_topic }}</h5>
           </div>
           {% endif %}
-        {% endfor %}
-      {% endif %}
-
-      <hr>
-      <div class="text-end">
-        <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#fullTranscript" aria-expanded="false" aria-controls="fullTranscript">
-          <i class="bi bi-chevron-down me-1"></i> View Full Transcript
-        </button>
-      </div>
-      <div class="collapse mt-3" id="fullTranscript">
-        <div class="border rounded p-3 transcript-text" style="white-space: pre-wrap; line-height: 1.7; letter-spacing: 0.01em;">{{ transcript.text }}</div>
-      </div>
-    {% else %}
-      <div class="transcript-text" style="white-space: pre-wrap; line-height: 1.7; letter-spacing: 0.01em;">{{ transcript.text }}</div>
-      <div class="alert alert-info mt-3 mb-0">Summary is being prepared. The full transcript is shown above.</div>
-    {% endif %}
-    {% endwith %}
-  </div>
-</div>
-{% endif %}
-
-<div class="row g-4">
-  <div class="col-lg-6">
-    <div class="card shadow-sm border-0 h-100">
-      <div class="card-header bg-white fw-semibold">Downloads</div>
-      <div class="card-body d-grid gap-2">
-        {% if recording.subtitled_video %}
-          <a class="btn btn-primary" href="{% url 'meetings:download_video' recording.id %}">Download Video with Subtitles (MP4)</a>
-          <p class="small text-muted mb-0">Every participant's video is recorded side by side, with the subtitles burned in.</p>
-        {% else %}
-          <button class="btn btn-primary" disabled>Subtitled video (processing...)</button>
-        {% endif %}
-        {% if transcript and transcript.srt_file %}
-          <a class="btn btn-outline-secondary" href="{% url 'meetings:download_srt' recording.id %}">Download SRT Subtitles</a>
-        {% endif %}
-      </div>
-    </div>
-  </div>
-  <div class="col-lg-6">
-    <div class="card shadow-sm border-0 h-100">
-      <div class="card-header bg-white fw-semibold">Translate &amp; Export PDF</div>
-      <div class="card-body">
-        <form method="post" action="{% url 'meetings:generate_translation' meeting.id %}">
-          {% csrf_token %}
           <div class="mb-3">
-            <label class="form-label">Target language</label>
-            <select name="language" class="form-select">
-              {% for code, label in languages %}
-                {% if not transcript or code != transcript.language %}
-                  <option value="{{ code }}" {% if code == 'hi' %}selected{% endif %}>{{ label }}</option>
+            <div class="small fw-semibold text-uppercase text-muted mb-2">Overview</div>
+            <p class="mb-0" style="line-height: 1.7; letter-spacing: 0.01em;">{{ summary.summary }}</p>
+            {% if summary.highlights %}
+            <div class="mt-3">
+              <div class="small fw-semibold text-uppercase text-muted mb-2">Highlights</div>
+              <ul class="mb-0">
+                {% for h in summary.highlights %}
+                <li>{{ h }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if summary.minutes %}
+            <div class="mt-3">
+              <div class="small fw-semibold text-uppercase text-muted mb-2">Minutes</div>
+              {% for section in summary.minutes %}
+                {% if section.items %}
+                <div class="mb-2">
+                  <div class="fw-semibold">{{ section.heading }}</div>
+                  <ul class="mb-0">
+                    {% for it in section.items %}<li>{{ it }}</li>{% endfor %}
+                  </ul>
+                </div>
                 {% endif %}
               {% endfor %}
-            </select>
-          </div>
-          <div class="d-flex gap-2 flex-wrap">
-            <button class="btn btn-outline-primary" type="submit" formaction="{% url 'meetings:translate_transcript' meeting.id %}" {% if not transcript %}disabled{% endif %}>
-              <i class="bi bi-translate me-1"></i> Translate only
-            </button>
-            <button class="btn btn-success" type="submit" {% if not transcript %}disabled{% endif %}>
-              <i class="bi bi-file-earmark-pdf me-1"></i> Generate PDF
-            </button>
-          </div>
-        </form>
-        {% if translations %}
-        <hr>
-        <p class="small fw-semibold mb-2">Translations</p>
-        {% for t in translations %}
-          <div class="border rounded p-3 mb-2">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-              <span class="badge text-bg-secondary">{{ t.language_code|upper }}</span>
-              {% if t.pdf_file %}
-                <a class="btn btn-sm btn-outline-success" href="{% url 'meetings:download_pdf' t.id %}">Download PDF</a>
-              {% else %}
-                <span class="text-muted small">PDF not generated yet</span>
-              {% endif %}
             </div>
-            <p class="small mb-0" style="white-space: pre-wrap;">{{ t.translated_text }}</p>
+            {% endif %}
           </div>
-        {% endfor %}
+
+          <hr>
+          <div class="text-end">
+            <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#fullTranscript{{ rec.id }}" aria-expanded="false" aria-controls="fullTranscript{{ rec.id }}">
+              <i class="bi bi-chevron-down me-1"></i> View Full Transcript
+            </button>
+          </div>
+          <div class="collapse mt-3" id="fullTranscript{{ rec.id }}">
+            <div class="border rounded p-3 transcript-text" style="white-space: pre-wrap; line-height: 1.7; letter-spacing: 0.01em;">{{ transcript.text }}</div>
+          </div>
+        {% else %}
+          <div class="transcript-text" style="white-space: pre-wrap; line-height: 1.7; letter-spacing: 0.01em;">{{ transcript.text }}</div>
+          <div class="alert alert-info mt-3 mb-0">Summary is being prepared. The full transcript is shown above.</div>
         {% endif %}
+        {% endwith %}
       </div>
     </div>
+    {% endif %}
+
+    <div class="row g-4">
+      <div class="col-lg-6">
+        <div class="card shadow-sm border-0 h-100">
+          <div class="card-header bg-white fw-semibold">Downloads</div>
+          <div class="card-body d-grid gap-2">
+            {% if rec.subtitled_video %}
+              <a class="btn btn-primary" href="{% url 'meetings:download_video' rec.id %}">Download Video with Subtitles (MP4)</a>
+              <p class="small text-muted mb-0">Every participant's video is recorded side by side, with the subtitles burned in.</p>
+            {% else %}
+              <button class="btn btn-primary" disabled>Subtitled video (processing...)</button>
+            {% endif %}
+            {% if transcript and transcript.srt_file %}
+              <a class="btn btn-outline-secondary" href="{% url 'meetings:download_srt' rec.id %}">Download SRT Subtitles</a>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card shadow-sm border-0 h-100">
+          <div class="card-header bg-white fw-semibold">Translate &amp; Export PDF</div>
+          <div class="card-body">
+            <form method="post" action="{% url 'meetings:generate_translation' meeting.id %}">
+              {% csrf_token %}
+              <input type="hidden" name="recording_id" value="{{ rec.id }}">
+              <div class="mb-3">
+                <label class="form-label">Target language</label>
+                <select name="language" class="form-select">
+                  {% for code, label in languages %}
+                    <option value="{{ code }}"
+                      {% if transcript and code == transcript.language %}disabled{% endif %}
+                      {% if code == 'hi' %}selected{% endif %}>
+                      {{ label }}{% if transcript and code == transcript.language %} (source language){% endif %}
+                    </option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-outline-primary" type="submit" formaction="{% url 'meetings:translate_transcript' meeting.id %}" {% if not transcript %}disabled{% endif %}>
+                  <i class="bi bi-translate me-1"></i> Translate only
+                </button>
+                <button class="btn btn-success" type="submit" {% if not transcript %}disabled{% endif %}>
+                  <i class="bi bi-file-earmark-pdf me-1"></i> Generate PDF
+                </button>
+              </div>
+            </form>
+            {% if item.translations %}
+            <hr>
+            <p class="small fw-semibold mb-2">Translations</p>
+            {% for t in item.translations %}
+            <div class="border rounded p-3 mb-2">
+              <div class="d-flex justify-content-between align-items-center mb-2">
+                <span class="badge text-bg-secondary">{{ t.language_code|upper }}</span>
+                {% if t.pdf_file %}
+                  <a class="btn btn-sm btn-outline-success" href="{% url 'meetings:download_pdf' t.id %}">Download PDF</a>
+                {% else %}
+                  <span class="text-muted small">PDF not generated yet</span>
+                {% endif %}
+              </div>
+              <p class="mb-0 small" style="white-space: pre-wrap;">{{ t.translated_text }}</p>
+            </div>
+            {% endfor %}
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
-</div>
+  {% endwith %}
+  {% endfor %}
 {% else %}
-<div class="alert alert-info">No recording uploaded for this meeting yet. End a live meeting after recording to process here.</div>
+<div class="alert alert-info">No recording uploaded for this meeting yet. Record the meeting and it will appear here for processing.</div>
 {% endif %}
 {% endblock %}
 
 {% block extra_js %}
-{% if recording and recording.status != 'ready' %}
 <script>
 (function poll() {
-  const el = document.getElementById('processing-status');
-  if (!el) return;
-  const id = el.dataset.recordingId;
-  fetch(`/recordings/${id}/status/`, { credentials: 'same-origin' })
-    .then(r => r.json())
-    .then(data => {
-      const badge = document.querySelector('#processing-status .badge');
-      const msg = document.getElementById('status-message');
-      if (msg) msg.textContent = data.status_message || data.status;
-      if (badge) {
-        badge.textContent = data.status.replace(/_/g, ' ');
-        badge.className = 'badge text-bg-' + (data.status === 'failed' ? 'danger' : 'warning');
-      }
-      if (data.status === 'ready' || data.status === 'failed') {
-        setTimeout(() => location.reload(), 800);
-      } else {
-        setTimeout(poll, 3000);
-      }
-    })
-    .catch(() => setTimeout(poll, 5000));
+  const els = Array.prototype.slice.call(
+    document.querySelectorAll('.processing-status[data-done="0"]')
+  );
+  if (!els.length) return;
+
+  let remaining = els.length;
+  let shouldReload = false;
+  let nextIn = 3000;
+
+  els.forEach(function (el) {
+    fetch('/recordings/' + el.dataset.recordingId + '/status/', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        const badge = el.querySelector('.badge');
+        const msg = el.querySelector('.status-message');
+        if (msg) msg.textContent = data.status_message || data.status;
+        if (badge) {
+          badge.textContent = data.status.replace(/_/g, ' ');
+          badge.className = 'badge text-bg-' + (data.status === 'failed' ? 'danger' : (data.status === 'ready' ? 'success' : 'warning'));
+        }
+        if (data.status === 'ready' || data.status === 'failed') {
+          el.dataset.done = '1';
+          shouldReload = true;   // download buttons may have just appeared
+        }
+      })
+      .catch(function () { nextIn = 5000; })
+      .finally(function () {
+        remaining -= 1;
+        if (remaining > 0) return;
+        if (shouldReload) setTimeout(function () { location.reload(); }, 800);
+        else setTimeout(poll, nextIn);
+      });
+  });
 })();
 </script>
-{% endif %}
 {% endblock %}

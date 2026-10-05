@@ -172,8 +172,14 @@
             <div class="d-flex align-items-center gap-3">
               <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--accent-blue); flex-shrink: 0;"></div>
               <div>
-                <div class="fw-medium">{{ m.room.title }}</div>
-                <small style="color: var(--text-muted);">{{ m.started_at|date:"d M Y H:i" }}</small>
+                <div class="fw-medium">{{ m.room.title }}
+                  {% if m.is_host %}
+                    <span class="badge rounded-pill" style="background: var(--bg-tertiary); color: var(--text-muted);">Host</span>
+                  {% else %}
+                    <span class="badge rounded-pill" style="background: var(--bg-tertiary); color: var(--text-muted);">Joined</span>
+                  {% endif %}
+                </div>
+                <small style="color: var(--text-muted);">{{ m.started_at|date:"d M Y H:i" }}{% if m.recording_count %} &middot; {{ m.recording_count }} recording{{ m.recording_count|pluralize }}{% endif %}</small>
               </div>
             </div>
             <a href="{% url 'meetings:meeting_detail' m.id %}" class="btn btn-sm btn-outline-secondary rounded-pill px-3">

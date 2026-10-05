@@ -27,11 +27,44 @@ from .tasks import enqueue_recording_processing
 User = get_user_model()
 
 
+def _get_recordings(meeting: Meeting) -> list[Recording]:
+    """Every recording saved for this meeting — one per participant."""
+    return list(meeting.recordings.select_related("recorded_by").order_by("-created_at"))
+
+
 def _get_recording(meeting: Meeting) -> Recording | None:
-    try:
-        return meeting.recording
-    except Recording.DoesNotExist:
-        return None
+    """Newest recording for the meeting (voice memos + legacy callers)."""
+    return meeting.recordings.order_by("-created_at").first()
+
+
+def _pick_recording(request, meeting: Meeting) -> Recording | None:
+    """Recording a form submission refers to, falling back to the newest."""
+    recording_id = request.POST.get("recording_id")
+    if recording_id:
+        recording = meeting.recordings.filter(pk=recording_id).first()
+        if recording:
+            return recording
+    return _get_recording(meeting)
+
+
+def _recording_cards(meeting: Meeting) -> list[dict]:
+    """Per-recording view data (recording + its transcript + translations)
+    for meeting_detail.html — avoids the template having to poke at a
+    reverse OneToOne that may not exist yet."""
+    cards = []
+    for rec in _get_recordings(meeting):
+        try:
+            transcript = rec.transcript
+        except Transcript.DoesNotExist:
+            transcript = None
+        cards.append(
+            {
+                "recording": rec,
+                "transcript": transcript,
+                "translations": list(transcript.translations.all()) if transcript else [],
+            }
+        )
+    return cards
 
 
 def _get_transcript(recording: Recording | None) -> Transcript | None:
@@ -59,7 +92,18 @@ def _redirect_target(request, meeting):
 @login_required
 def dashboard(request):
     rooms = Room.objects.filter(host=request.user, is_active=True)[:10]
-    recent_meetings = Meeting.objects.filter(host=request.user).select_related("room", "recording")[:10]
+    # Meetings you HOSTED and meetings you merely JOINED both belong here, so
+    # a participant can get back to the recording they saved.
+    recent_meetings = (
+        Meeting.objects.filter(Q(host=request.user) | Q(participants=request.user))
+        .select_related("room", "host")
+        .prefetch_related("recordings")
+        .distinct()
+        .order_by("-started_at")[:10]
+    )
+    for m in recent_meetings:
+        m.is_host = m.host_id == request.user.id
+        m.recording_count = len(m.recordings.all())
     return render(
         request,
         "meetings/dashboard.html",
@@ -98,6 +142,9 @@ def room_view(request, code):
     meeting = Meeting.objects.filter(room=room, ended_at__isnull=True).first()
     if not meeting:
         meeting = Meeting.objects.create(room=room, host=room.host)
+    # Remember who attended so their dashboard can list this meeting (and the
+    # recording they save from it) afterwards.
+    meeting.participants.add(request.user)
 
     ice_servers = list(settings.WEBRTC_ICE_SERVERS)
     cloudflare_servers = get_cloudflare_turn_ice_servers()
@@ -122,18 +169,20 @@ def room_view(request, code):
 @login_required
 def meeting_detail(request, meeting_id):
     meeting = get_object_or_404(Meeting.objects.select_related("room", "host"), pk=meeting_id)
-    recording = _get_recording(meeting)
-    transcript = _get_transcript(recording)
-    translations = transcript.translations.all() if transcript else []
+    recordings = _get_recordings(meeting)
+    primary = recordings[0] if recordings else None
+    transcript = _get_transcript(primary)
 
     return render(
         request,
         "meetings/meeting_detail.html",
         {
             "meeting": meeting,
-            "recording": recording,
+            "recordings": _recording_cards(meeting),
+            # Kept for anything that still expects a single recording.
+            "recording": primary,
             "transcript": transcript,
-            "translations": translations,
+            "translations": transcript.translations.all() if transcript else [],
             "languages": settings.SUPPORTED_LANGUAGES,
         },
     )
@@ -164,7 +213,24 @@ def upload_recording(request, meeting_id):
     duration = int(request.POST.get("duration", 0))
     target_lang = request.POST.get("target_lang", "en")
 
-    recording, created = Recording.objects.get_or_create(meeting=meeting)
+    # Each participant gets their OWN recording row, so one person pressing
+    # Record can never wipe out someone else's transcript/video (this used to
+    # be a OneToOne and the last upload silently won).
+    recording = Recording.objects.filter(meeting=meeting, recorded_by=request.user).first()
+    created = recording is None
+
+    if recording is None and request.user in (meeting.host, meeting.room.host):
+        # Adopt a row uploaded before recordings were per-participant so the
+        # host's original file isn't duplicated.
+        legacy = Recording.objects.filter(meeting=meeting, recorded_by__isnull=True).first()
+        if legacy is not None:
+            legacy.recorded_by = request.user
+            legacy.save(update_fields=["recorded_by"])
+            recording, created = legacy, False
+
+    if recording is None:
+        recording = Recording.objects.create(meeting=meeting, recorded_by=request.user)
+        created = True
 
     # Actively running pipeline can't be replaced mid-flight. Other states
     # (uploaded, failed, subtitling, translating, ready) may be replaced by
@@ -245,7 +311,7 @@ def recording_status(request, recording_id):
 @require_POST
 def translate_transcript(request, meeting_id):
     meeting = get_object_or_404(Meeting, pk=meeting_id)
-    recording = _get_recording(meeting)
+    recording = _pick_recording(request, meeting)
     transcript = _get_transcript(recording)
     if not transcript:
         messages.error(request, "Transcript not ready yet.")
@@ -281,7 +347,7 @@ def translate_transcript(request, meeting_id):
 @require_POST
 def generate_translation(request, meeting_id):
     meeting = get_object_or_404(Meeting, pk=meeting_id)
-    recording = _get_recording(meeting)
+    recording = _pick_recording(request, meeting)
     transcript = _get_transcript(recording)
     if not transcript:
         messages.error(request, "Transcript not ready yet.")
@@ -410,11 +476,14 @@ def download_subtitled_video(request, recording_id):
 
 @login_required
 def download_pdf(request, translation_id):
-    translation = get_object_or_404(
-        Translation,
-        pk=translation_id,
-        transcript__recording__meeting__host=request.user,
-    )
+    translation = get_object_or_404(Translation, pk=translation_id)
+    meeting = translation.transcript.recording.meeting
+    # The host, the room owner and anyone who joined the meeting may export.
+    if (
+        request.user not in (meeting.host, meeting.room.host)
+        and not meeting.participants.filter(pk=request.user.pk).exists()
+    ):
+        raise Http404("Not available")
     if not translation.pdf_file:
         raise Http404("PDF not available")
     return FileResponse(

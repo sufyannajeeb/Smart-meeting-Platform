@@ -226,6 +226,7 @@
 
     videoEl.play().then(function () {
       _pendingAttach.delete(remoteId);
+      videoEl._playRetryCycles = 0;
       // Unmute after a short delay so audio doesn't blast
       setTimeout(function () {
         videoEl.muted = false;
@@ -238,32 +239,63 @@
           playVideoWithRetry(videoEl, remoteId, attempt + 1);
         }, DELAYS[attempt + 1] || 1000);
       } else {
-        console.error("[pc] remote video play() gave up after " + MAX_ATTEMPTS + " attempts for", remoteId);
+        console.warn("[pc] remote video play() gave up after " + MAX_ATTEMPTS + " attempts for", remoteId, "— will retry muted");
         _pendingAttach.delete(remoteId);
-        // Force a reload of the video element as a last resort
-        try {
-          videoEl.load();
-          videoEl.play().then(function () {
-            setTimeout(function () { videoEl.muted = false; }, 500);
-          }).catch(function () {});
-        } catch (_) {}
+        // NEVER call videoEl.load() here: load() resets the element and
+        // clears srcObject, permanently killing the tile (black video, no
+        // audio, and nothing ever re-attaches). Stay muted (autoplay is
+        // always allowed for muted video) and start a slower retry cycle
+        // that recovers as soon as the browser permits playback.
+        videoEl.muted = true;
+        videoEl._playRetryCycles = (videoEl._playRetryCycles || 0) + 1;
+        if (!videoEl._playRetryScheduled && videoEl._playRetryCycles <= 4) {
+          videoEl._playRetryScheduled = true;
+          setTimeout(function () {
+            videoEl._playRetryScheduled = false;
+            if (videoEl.srcObject) playVideoWithRetry(videoEl, remoteId, 0);
+          }, 5000);
+        }
       }
     });
   }
 
-  async function sendOffer(pc, remoteId) {
+  // Offers can only be created from the "stable" signaling state. When media
+  // shows up mid-negotiation (camera granted late, tracks added while we're
+  // answering) we remember the request and flush it the moment we're stable —
+  // otherwise that media is silently never negotiated and the far end never
+  // receives it.
+  async function flushOffer(pc, remoteId) {
+    if (!pc._pendingOffer) return;
+    if (pc._makingOffer) return;
+    if (pc.connectionState === "closed") { pc._pendingOffer = false; return; }
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    addMissingLocalTracks(pc);
-    var opts = pc._restartAttempts > 0 ? { iceRestart: true } : undefined;
-    var offer = await pc.createOffer(opts);
-    await pc.setLocalDescription(offer);
-    ws.send(
-      JSON.stringify({
-        type: "offer",
-        target_id: remoteId,
-        sdp: pc.localDescription,
-      })
-    );
+    if (pc.signalingState !== "stable") return; // retried on signalingstatechange
+
+    pc._pendingOffer = false;
+    pc._makingOffer = true;
+    try {
+      addMissingLocalTracks(pc);
+      var opts = pc._restartAttempts > 0 ? { iceRestart: true } : undefined;
+      var offer = await pc.createOffer(opts);
+      if (pc.signalingState !== "stable") return; // raced by another offer
+      await pc.setLocalDescription(offer);
+      ws.send(
+        JSON.stringify({
+          type: "offer",
+          target_id: remoteId,
+          sdp: pc.localDescription,
+        })
+      );
+    } catch (err) {
+      console.error("[pc] sendOffer failed for", remoteId, err);
+    } finally {
+      pc._makingOffer = false;
+    }
+  }
+
+  function sendOffer(pc, remoteId) {
+    pc._pendingOffer = true;
+    return flushOffer(pc, remoteId);
   }
 
   function createPeer(remoteId, initiator) {
@@ -281,6 +313,9 @@
     pc._isInitiator = !!initiator;
     pc._negotiationDone = false;
     pc._restartAttempts = 0;
+    pc._pendingOffer = false;   // an offer is requested (flushed when stable)
+    pc._makingOffer = false;    // createOffer/setLocalDescription in flight
+    pc._ignoreOffer = false;    // discard a remote offer we lost glare against
     pc._candidateCounts = { host: 0, srflx: 0, relay: 0, prflx: 0, other: 0 };
 
     // Only the INITIATOR adds tracks here — triggers onnegotiationneeded →
@@ -390,6 +425,10 @@
       // ICE candidates that arrived while we were in a mid-negotiation state.
       if (pc.signalingState === "stable") {
         flushPendingCandidates(remoteId, pc);
+        // A negotiation was requested while we were busy — honour it now.
+        if (pc._pendingOffer) {
+          flushOffer(pc, remoteId);
+        }
       }
     };
 
@@ -416,9 +455,17 @@
     }, 6000);
 
     pc.onnegotiationneeded = async function () {
-      if (!pc._isInitiator) return;
-      if (pc._negotiationDone && pc.signalingState === "stable" && pc._restartAttempts === 0) return;
-      if (pc.signalingState !== "stable") return;
+      // BOTH sides may start a negotiation (perfect negotiation). The answerer
+      // side used to bail out here, which meant any media added AFTER we
+      // answered — a mic/camera granted late, or a media kind the remote
+      // offer didn't contain — was never renegotiated, so the other
+      // participants never received it. That is exactly the "joined but not
+      // audible/visible" bug.
+      if (pc.signalingState !== "stable") {
+        // Will be flushed as soon as we return to stable (see below).
+        pc._pendingOffer = true;
+        return;
+      }
       pc._negotiationDone = true;
       try {
         await sendOffer(pc, remoteId);
@@ -591,13 +638,29 @@
 
     if (data.type === "offer" && data.sdp) {
       try {
-        // Handle glare: if we already sent an offer, roll back before accepting
-        // the remote offer so we end up as the answerer.
+        // GLARE (both sides offered at the same time). Resolve it
+        // deterministically so both browsers make the SAME choice:
+        //   - the peer with the HIGHER id keeps its own offer ("impolite")
+        //     and discards the remote one,
+        //   - the peer with the LOWER id backs down ("polite"), rolls its
+        //     own offer back and answers.
+        // Both sides independently compute the same winner, so we can never
+        // end up with both rolling back (or both refusing).
+        var polite = Number(cfg.userId) < Number(remoteId);
+        var offerCollision =
+          pc._makingOffer || pc._pendingOffer || pc.signalingState === "have-local-offer";
+        if (offerCollision && !polite) {
+          console.log("[pc] glare — ignoring remote offer from", remoteId, "(we are impolite)");
+          pc._ignoreOffer = true;
+          return;
+        }
+        pc._ignoreOffer = false;
         if (pc.signalingState === "have-local-offer") {
-          console.log("[pc] glare — rolling back local offer from", remoteId);
+          console.log("[pc] glare — rolling back local offer from", remoteId, "(we are polite)");
           await pc.setLocalDescription({ type: "rollback" });
         }
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        pc._ignoreOffer = false;
         // CRITICAL: tracks must be added AFTER setRemoteDescription(offer) so
         // the transceivers match the offer's m-lines. This ensures the answer
         // carries our video/audio as sendrecv.
@@ -609,7 +672,7 @@
             type: "answer",
             target_id: remoteId,
             sdp: pc.localDescription,
-          })
+          }          )
         );
       } catch (err) {
         console.error("[pc] offer handling error for", remoteId, err);
@@ -623,10 +686,22 @@
       }
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        // Clear the "we lost glare" state — this remote description is the
+        // one we accepted. (_pendingOffer is deliberately left alone: media
+        // added while our own offer was in flight still needs a follow-up
+        // negotiation, and a harmless extra offer is much cheaper than a
+        // camera/mic that never gets sent.)
+        pc._ignoreOffer = false;
       } catch (err) {
         console.error("[pc] answer handling error for", remoteId, err);
       }
     } else if (data.type === "ice-candidate" && data.candidate) {
+      // Candidates that belong to an offer we just discarded (glare) must not
+      // be applied — they describe a negotiation that no longer exists.
+      if (pc._ignoreOffer) {
+        console.log("[pc] dropping ICE candidate from", remoteId, "(ignored offer)");
+        return;
+      }
       // Buffer candidates that arrive before the remote description is set.
       // They'll be flushed once the PC reaches stable state.
       if (pc.remoteDescription && pc.remoteDescription.type) {
@@ -673,33 +748,110 @@
     };
   }
 
+  // Add the local tracks we have to EVERY peer that is missing them and ask
+  // for a renegotiation. Runs after media is (re)acquired — including for
+  // peers we ANSWERED rather than initiated, which used to be skipped and
+  // left those participants without our audio/video.
+  function backfillPeers() {
+    peers.forEach(function (pc, id) {
+      if (pc.connectionState === "closed") return;
+      var added = 0;
+      try {
+        added = addMissingLocalTracks(pc);
+      } catch (err) {
+        console.warn("[pc] backfill addTrack failed for", id, err);
+        return;
+      }
+      if (added > 0) {
+        console.log("[pc] backfilled", added, "track(s) to peer", id, "— renegotiating");
+        sendOffer(pc, id).catch(function (err) {
+          console.error("[pc] backfill offer failed for", id, err);
+        });
+      }
+    });
+  }
+
+  let mediaInitPromise = null;
   async function initMedia() {
-    try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    if (mediaInitPromise) return mediaInitPromise;
+    mediaInitPromise = _initMedia().finally(function () {
+      mediaInitPromise = null;
+    });
+    return mediaInitPromise;
+  }
+
+  async function _initMedia() {
+    // The page can create a stream of its own (camera button pressed while
+    // our first getUserMedia failed). Adopt it so we never end up with two
+    // different "local stream" objects — the peers would only ever get one
+    // of them.
+    if (!localStream && window.SMARTMEET_LOCAL_STREAM) {
+      localStream = window.SMARTMEET_LOCAL_STREAM;
+    }
+
+    const hasLive = function (kind) {
+      return (
+        localStream &&
+        localStream.getTracks().some(function (t) {
+          return t.kind === kind && t.readyState === "live";
+        })
+      );
+    };
+
+    const needVideo = !hasLive("video");
+    const needAudio = !hasLive("audio");
+
+    if (needVideo || needAudio) {
+      // Try the full request first, then relax: a missing/blocked CAMERA must
+      // never cost the user their MICROPHONE (an all-or-nothing getUserMedia
+      // failure is how someone ends up joined-but-silent), and vice versa.
+      const attempts = [];
+      if (needVideo && needAudio) attempts.push({ video: true, audio: true });
+      if (needAudio) attempts.push({ audio: true, video: false });
+      if (needVideo) attempts.push({ video: true, audio: false });
+
+      let stream = null;
+      let lastErr = null;
+      for (const constraints of attempts) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn("[media] getUserMedia failed for", constraints, err);
+        }
+      }
+
+      if (!stream) {
+        console.warn("Camera/mic unavailable, joining without media:", lastErr);
+        setStatus("Joined without camera/microphone — click Mute or Camera to retry");
+        backfillPeers();
+        return;
+      }
+
+      if (!localStream) {
+        localStream = stream;
+      } else {
+        stream.getTracks().forEach(function (track) {
+          if (!localStream.getTracks().some(function (t) { return t.id === track.id; })) {
+            localStream.addTrack(track);
+          }
+        });
+      }
       if (localVideo) localVideo.srcObject = localStream;
       window.SMARTMEET_LOCAL_STREAM = localStream;
       setStatus("Camera and microphone ready — connecting...");
-
-      // Backfill: if any initiator peer was created BEFORE getUserMedia
-      // resolved (slow device/browser prompt), no tracks were on it so no
-      // offer was ever sent. Add the now-available tracks and negotiate.
-      peers.forEach(async function (pc, id) {
-        if (pc._isInitiator && pc.signalingState === "stable") {
-          var added = addMissingLocalTracks(pc);
-          if (added > 0) {
-            try {
-              await sendOffer(pc, id);
-            } catch (err) {
-              console.error("[pc] backfill offer failed for", id, err);
-            }
-          }
-        }
-      });
-    } catch (e) {
-      console.warn("Camera/mic unavailable, joining without media:", e);
-      setStatus("Joined without camera/microphone — others won't see your video");
     }
+
+    // Backfill EVERY peer (not just the ones we initiated): tracks added
+    // after a peer connection was negotiated are only sent once we
+    // renegotiate, otherwise the far end never hears/sees us.
+    backfillPeers();
   }
+
+  // So the page can re-request permission if the first attempt failed
+  // (denied, device busy, no camera…) instead of staying mute forever.
+  window.SMARTMEET_INIT_MEDIA = initMedia;
 
   window.SMARTMEET_SET_VIDEO = async function (enabled) {
     if (!localStream) return;

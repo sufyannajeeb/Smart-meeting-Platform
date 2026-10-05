@@ -60,62 +60,109 @@ def process_recording(recording_id: int, default_target_lang: str = "hi") -> Non
         existing = Transcript.objects.filter(recording=recording).first()
         reuse_transcript = bool(existing and existing.text and existing.text.strip())
 
+        transcript = existing
+        transcription_error = None
+
         if reuse_transcript:
             _set_status(recording, Recording.STATUS_PROCESSING, "Using saved transcript (skipping Whisper)...")
             full_text = existing.text
             segments = existing.segments_json or []
             detected_lang = existing.language or "en"
-            transcript = existing
         else:
-            extract_audio(raw_path, audio_path)
-            _set_status(recording, Recording.STATUS_TRANSCRIBING, "Running Whisper speech-to-text (may take several minutes)...")
-            full_text, segments, detected_lang = transcribe_audio(audio_path)
-            transcript, _ = Transcript.objects.update_or_create(
-                recording=recording,
-                defaults={
-                    "text": full_text,
-                    "segments_json": segments,
-                    "language": detected_lang,
-                },
-            )
+            try:
+                extract_audio(raw_path, audio_path)
+                _set_status(recording, Recording.STATUS_TRANSCRIBING, "Running Whisper speech-to-text (may take several minutes)...")
+                full_text, segments, detected_lang = transcribe_audio(audio_path)
+            except Exception as exc:
+                # A missing/quiet audio track or an unavailable model must not
+                # throw the recording away — keep going without a transcript so
+                # the (split-screen) video still gets delivered.
+                logger.warning("Transcription skipped (continuing without a transcript): %s", exc)
+                if isinstance(exc, FFmpegError):
+                    transcription_error = "the video's audio could not be read (it may have no sound track)"
+                else:
+                    transcription_error = f"{exc.__class__.__name__}: {str(exc)[:200]}"
+                full_text, segments, detected_lang = "", [], "en"
 
-        if not segments and full_text.strip():
+            if full_text.strip():
+                transcript, _ = Transcript.objects.update_or_create(
+                    recording=recording,
+                    defaults={
+                        "text": full_text,
+                        "segments_json": segments,
+                        "language": detected_lang,
+                    },
+                )
+
+        has_speech = bool(full_text.strip())
+
+        if not segments and has_speech:
             duration = max(recording.duration_seconds, 10)
             segments = [{"start": 0.0, "end": float(duration), "text": full_text.strip()}]
 
-        srt_content = segments_to_srt(segments)
-        if not srt_content.strip():
-            srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{full_text.strip()}\n"
+        srt_content = ""
+        if has_speech and transcript:
+            srt_content = segments_to_srt(segments)
+            if not srt_content.strip():
+                srt_content = f"1\n00:00:00,000 --> 00:00:10,000\n{full_text.strip()}\n"
 
-        srt_path.write_text(srt_content, encoding="utf-8")
-        transcript.segments_json = segments
-        transcript.text = full_text
-        transcript.language = detected_lang
-        transcript.save(update_fields=["segments_json", "text", "language"])
-        transcript.srt_file.save(f"{recording.id}.srt", ContentFile(srt_content.encode("utf-8")), save=True)
+            srt_path.write_text(srt_content, encoding="utf-8")
+            transcript.segments_json = segments
+            transcript.text = full_text
+            transcript.language = detected_lang
+            transcript.save(update_fields=["segments_json", "text", "language"])
+            transcript.srt_file.save(f"{recording.id}.srt", ContentFile(srt_content.encode("utf-8")), save=True)
 
-        if not transcript.summary_json or not transcript.summary_json.get("summary"):
-            try:
-                summary = generate_meeting_summary(full_text, detected_lang, segments)
-                Transcript.objects.filter(pk=transcript.pk).update(summary_json=summary)
-            except Exception as exc:
-                logger.warning("Summary generation failed (non-fatal): %s", exc)
+            if not transcript.summary_json or not transcript.summary_json.get("summary"):
+                try:
+                    summary = generate_meeting_summary(full_text, detected_lang, segments)
+                    Transcript.objects.filter(pk=transcript.pk).update(summary_json=summary)
+                except Exception as exc:
+                    logger.warning("Summary generation failed (non-fatal): %s", exc)
 
         _set_status(recording, Recording.STATUS_SUBTITLING, "Embedding subtitles into the video...")
         convert_to_mp4(raw_path, str(mp4_path))
-        burn_subtitles(
-            str(mp4_path),
-            str(srt_path),
-            str(subtitled_path),
-            cues=segments,
-            work_dir=str(work_dir),
-        )
 
-        if not subtitled_path.is_file():
-            raise FFmpegError("Subtitled video was not created.")
+        if not has_speech:
+            # Nothing to caption — still ship the video instead of failing the
+            # whole pipeline and losing the recording entirely.
+            shutil.copyfile(mp4_path, subtitled_path)
+        else:
+            try:
+                burn_subtitles(
+                    str(mp4_path),
+                    str(srt_path),
+                    str(subtitled_path),
+                    cues=segments,
+                    work_dir=str(work_dir),
+                )
+                if not subtitled_path.is_file():
+                    raise FFmpegError("Subtitled video was not created.")
+            except FFmpegError as exc:
+                # Never lose the recording over a caption burn: save the video
+                # without burned-in captions. The SRT is already stored above
+                # and stays downloadable from the meeting page.
+                logger.warning("Subtitle burn failed, saving video without burned-in captions: %s", exc)
+                shutil.copyfile(mp4_path, subtitled_path)
 
         with open(subtitled_path, "rb") as f:
             recording.subtitled_video.save(f"subtitled_{recording.id}.mp4", ContentFile(f.read()), save=False)
+
+        if not has_speech:
+            meeting.ended_at = meeting.ended_at or timezone.now()
+            meeting.save(update_fields=["ended_at"])
+            if transcription_error:
+                ready_message = (
+                    "Video is ready, but subtitles could not be generated: "
+                    f"{transcription_error}. Use Retry to transcribe again."
+                )
+            else:
+                ready_message = (
+                    "Video is ready. No speech was detected, so no subtitles were generated."
+                )
+            _set_status(recording, Recording.STATUS_READY, ready_message)
+            recording.save()
+            return
 
         _set_status(recording, Recording.STATUS_TRANSLATING, "Creating PDF...")
         target = default_target_lang or "hi"

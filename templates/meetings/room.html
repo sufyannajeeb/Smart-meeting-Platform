@@ -1511,6 +1511,18 @@
     let isMuted = false;
 
     btnMute.addEventListener('click', function () {
+      // If the mic never came up when we joined (permission denied, no
+      // device, or getUserMedia failed) a plain mute toggle would do
+      // nothing — and this participant would stay silent for the whole
+      // meeting. Retry the capture instead, then carry on.
+      const liveMic = window.SMARTMEET_LOCAL_STREAM &&
+        window.SMARTMEET_LOCAL_STREAM.getAudioTracks().some(t => t.readyState === 'live');
+      if (!liveMic) {
+        if (window.SMARTMEET_INIT_MEDIA) window.SMARTMEET_INIT_MEDIA();
+        if (statusLine) statusLine.textContent = 'Requesting microphone access…';
+        return;
+      }
+
       isMuted = !isMuted;
       const stream = window.SMARTMEET_LOCAL_STREAM;
       if (stream) stream.getAudioTracks().forEach(t => { t.enabled = !isMuted; });
@@ -1596,6 +1608,33 @@
     }
 
     btnVideo.addEventListener('click', async function () {
+      if (isToggling) return;
+
+      const liveCam = window.SMARTMEET_LOCAL_STREAM &&
+        window.SMARTMEET_LOCAL_STREAM.getVideoTracks().some(t => t.readyState === 'live');
+      if (!window.SMARTMEET_LOCAL_STREAM) {
+        // No media at all — re-request it (this also backfills every peer
+        // connection so the others actually receive our mic/camera).
+        isToggling = true;
+        try {
+          if (window.SMARTMEET_INIT_MEDIA) await window.SMARTMEET_INIT_MEDIA();
+        } finally {
+          isToggling = false;
+        }
+        if (window.SMARTMEET_LOCAL_STREAM &&
+            window.SMARTMEET_LOCAL_STREAM.getVideoTracks().some(t => t.readyState === 'live')) {
+          isVideoOn = true;
+          setVideoUI(true);
+        }
+        return;
+      }
+      if (isVideoOn && !liveCam) {
+        // The camera never started on join, so the button state is stale —
+        // treat this press as "Start Video" rather than "Stop Video".
+        isVideoOn = false;
+        setVideoUI(false);
+      }
+
       if (isToggling) return;
       isToggling = true;
       try {
@@ -2659,6 +2698,6 @@
 </script>
 
 <!-- Your existing scripts -->
-<script src="{% static 'js/webrtc.js' %}?v=10-video-fix"></script>
-<script src="{% static 'js/recorder.js' %}"></script>
+<script src="{% static 'js/webrtc.js' %}?v=11-perfect-negotiation"></script>
+<script src="{% static 'js/recorder.js' %}?v=4-split-screen-warning"></script>
 {% endblock %}
